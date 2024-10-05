@@ -79,6 +79,7 @@ class ViewerManifest(LLManifest):
                 self.exclude("logcontrol.xml")
                 self.exclude("logcontrol-dev.xml")
                 self.path("*.ini")
+                self.path("*.txt")
                 self.path("*.xml")
 
                 # include the entire shaders directory recursively
@@ -594,6 +595,9 @@ class Windows_x86_64_Manifest(ViewerManifest):
             self.path("vivoxsdk_x64.dll")
             self.path("ortp_x64.dll")
 
+            # SDL3
+            self.path("SDL3.dll")
+
             # BugSplat
             if self.args.get('bugsplat'):
                 self.path("BsSndRpt64.exe")
@@ -994,7 +998,7 @@ class Darwin_x86_64_Manifest(ViewerManifest):
             # Remember where we parked this car.
             with self.prefix(src=relpkgdir, dst="Frameworks"):
                 self.path("libndofdev.dylib")
-
+                self.path("libSDL3.dylib") # gamecontrol
 
                 if self.args.get('bugsplat'):
                     self.path2basename(relpkgdir, "BugsplatMac.framework")

@@ -35,7 +35,7 @@ void LLWorkGraphManager::addGraph(std::shared_ptr<LLWorkGraph> graph)
 {
     if (!graph)
     {
-        LL_WARNS("WorkGraph") << "Attempted to add null work graph" << LL_ENDL;
+        LL_DEBUGS("WorkGraph") << "Attempted to add null work graph" << LL_ENDL;
         return;
     }
 

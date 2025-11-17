@@ -854,6 +854,7 @@ public:
     GraphResult getRaw(const std::string& url);
     GraphResult putRaw(const std::string& url, const LLSD& body);
     GraphResult deleteRaw(const std::string& url);
+    GraphResult postFile(const std::string& url, const LLUUID& assetId, LLAssetType::EType assetType);
 
     // Static utility method - extract HTTP status from LLSD result
     static LLCore::HttpStatus getStatusFromLLSD(const LLSD& httpResults);

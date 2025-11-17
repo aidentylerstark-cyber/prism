@@ -43,6 +43,10 @@ public:
 
     ~LLViewerAssetStorage();
 
+    // A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+    void setUseWorkGraph(bool useWorkGraph) { mUseWorkGraph = useWorkGraph; }
+    bool getUseWorkGraph() const { return mUseWorkGraph; }
+
     void storeAssetData(
         const LLTransactionID& tid,
         LLAssetType::EType atype,
@@ -87,6 +91,11 @@ protected:
                           LLGetAssetCallback callback,
                           void *user_data);
 
+    void assetRequestWorkGraph(const LLUUID uuid,
+                               LLAssetType::EType atype,
+                               LLGetAssetCallback callback,
+                               void *user_data);
+
     std::string getAssetURL(const std::string& cap_url, const LLUUID& uuid, LLAssetType::EType atype);
 
     void logAssetStorageInfo() override;
@@ -122,6 +131,9 @@ protected:
     S32 mCountCompleted;
     S32 mCountSucceeded;
     S64 mTotalBytesFetched;
+
+    // A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+    bool mUseWorkGraph = false;
 
     static S32 sAssetCoroCount; // coroutine count, static since coroutines can outlive LLViewerAssetStorage
 };

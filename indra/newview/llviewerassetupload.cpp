@@ -53,8 +53,12 @@
 #include "llkeyframemotion.h"
 #include "lldatapacker.h"
 #include "llvoavatarself.h"
+#include "llworkgraphmanager.h"
 
 void dialog_refresh_all();
+
+// A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+bool LLViewerAssetUpload::mUseWorkGraph = false;
 
 static const U32 LL_ASSET_UPLOAD_TIMEOUT_SEC = 60;
 
@@ -848,13 +852,24 @@ LLSD LLScriptAssetUpload::generatePostBody()
 /*static*/
 LLUUID LLViewerAssetUpload::EnqueueInventoryUpload(const std::string &url, const LLResourceUploadInfo::ptr_t &uploadInfo)
 {
-    std::string procName("LLViewerAssetUpload::AssetInventoryUploadCoproc(");
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        // Work graph implementation - no queue ID, return placeholder
+        AssetInventoryUploadWorkGraph(url, uploadInfo);
+        return LLUUID::generateNewID();  // Generate placeholder ID for compatibility
+    }
+    else
+    {
+        // Baseline coroutine implementation
+        std::string procName("LLViewerAssetUpload::AssetInventoryUploadCoproc(");
 
-    LLUUID queueId = LLCoprocedureManager::instance().enqueueCoprocedure("Upload",
-        procName + LLAssetType::lookup(uploadInfo->getAssetType()) + ")",
-        boost::bind(&LLViewerAssetUpload::AssetInventoryUploadCoproc, _1, _2, url, uploadInfo));
+        LLUUID queueId = LLCoprocedureManager::instance().enqueueCoprocedure("Upload",
+            procName + LLAssetType::lookup(uploadInfo->getAssetType()) + ")",
+            boost::bind(&LLViewerAssetUpload::AssetInventoryUploadCoproc, _1, _2, url, uploadInfo));
 
-    return queueId;
+        return queueId;
+    }
 }
 
 //=========================================================================
@@ -973,6 +988,208 @@ void LLViewerAssetUpload::AssetInventoryUploadCoproc(LLCoreHttpUtil::HttpCorouti
     {
         floater_snapshot->notify(LLSD().with("set-finished", LLSD().with("ok", success).with("msg", "inventory")));
     }
+}
+
+//=========================================================================
+/*static*/
+void LLViewerAssetUpload::AssetInventoryUploadWorkGraph(std::string url, LLResourceUploadInfo::ptr_t uploadInfo)
+{
+    LL_DEBUGS("Upload") << "Work graph asset upload to " << url
+                        << " type " << LLAssetType::lookup(uploadInfo->getAssetType())
+                        << LL_ENDL;
+
+    // Create HTTP adapter
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AssetUpload", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Shared state between nodes
+    struct UploadState {
+        std::string uploaderUrl;
+        LLSD metadataResult;
+        bool success = false;
+        LLResourceUploadInfo::ptr_t uploadInfo;
+    };
+    auto state = std::make_shared<UploadState>();
+    state->uploadInfo = uploadInfo;
+
+    // Step 1: Prepare upload and POST metadata
+    LLSD result = uploadInfo->prepareUpload();
+    uploadInfo->logPreparedUpload();
+
+    if (result.has("error"))
+    {
+        LLResourceUploadInfo::ptr_t mutableUploadInfo = uploadInfo;
+        HandleUploadError(LLCore::HttpStatus(499), result, mutableUploadInfo);
+        return;
+    }
+
+    if (uploadInfo->showUploadDialog())
+    {
+        std::string uploadMessage = "Uploading...\n\n";
+        uploadMessage.append(uploadInfo->getDisplayName());
+        LLUploadDialog::modalUploadDialog(uploadMessage);
+    }
+
+    // Step 2: POST metadata to get uploader URL
+    LLSD body = uploadInfo->generatePostBody();
+    auto metadataResult = httpAdapter->postRaw(url, body);
+
+    // Step 3: Process metadata response
+    auto processMetadataNode = metadataResult.graph->addNode(
+        [state, uploadInfo, sharedResult = metadataResult.result]() -> LLWorkResult
+        {
+            const LLSD& result = sharedResult->result;
+            const LLSD& httpResults = result[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            if (!status || result.has("error"))
+            {
+                LL_WARNS("Upload") << "Metadata POST failed" << LL_ENDL;
+                LLSD mutableResult = result;
+                LLResourceUploadInfo::ptr_t mutableUploadInfo = uploadInfo;
+                HandleUploadError(status, mutableResult, mutableUploadInfo);
+                if (uploadInfo->showUploadDialog())
+                    LLUploadDialog::modalUploadFinished();
+                return LLWorkResult::Complete;
+            }
+
+            state->uploaderUrl = result["uploader"].asString();
+            state->metadataResult = result;
+
+            if (state->uploaderUrl.empty() || uploadInfo->getAssetId().isNull())
+            {
+                LL_WARNS("Upload") << "No uploader URL or invalid asset ID" << LL_ENDL;
+                if (uploadInfo->showUploadDialog())
+                    LLUploadDialog::modalUploadFinished();
+                return LLWorkResult::Complete;
+            }
+
+            LL_DEBUGS("Upload") << "Got uploader URL: " << state->uploaderUrl << LL_ENDL;
+            return LLWorkResult::Complete;
+        },
+        "upload-process-metadata",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+    metadataResult.graph->addDependency(metadataResult.httpNode, processMetadataNode);
+
+    // Step 4: POST file to uploader URL (conditional on having uploader URL)
+    auto fileUploadNode = metadataResult.graph->addNode(
+        [state, httpAdapter]() -> LLWorkResult
+        {
+            // This node executes the file upload if we have a valid uploader URL
+            if (!state->uploaderUrl.empty() && state->uploadInfo->getAssetId().notNull())
+            {
+                auto fileResult = httpAdapter->postFile(
+                    state->uploaderUrl,
+                    state->uploadInfo->getAssetId(),
+                    state->uploadInfo->getAssetType());
+
+                // Schedule the file result processing
+                auto processFileNode = fileResult.graph->addNode(
+                    [state, sharedResult = fileResult.result]() -> LLWorkResult
+                    {
+                        if (LLApp::isExiting())
+                        {
+                            LL_DEBUGS("Upload") << "App exiting, aborting upload" << LL_ENDL;
+                            if (state->uploadInfo->showUploadDialog())
+                                LLUploadDialog::modalUploadFinished();
+                            return LLWorkResult::Complete;
+                        }
+
+                        const LLSD& result = sharedResult->result;
+                        const LLSD& httpResults = result[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+                        LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+                        std::string ulstate = result["state"].asString();
+
+                        if (!status || ulstate != "complete")
+                        {
+                            LL_WARNS("Upload") << "File upload failed, state: " << ulstate << LL_ENDL;
+                            LLSD mutableResult = result;
+                            LLResourceUploadInfo::ptr_t mutableUploadInfo = state->uploadInfo;
+                            HandleUploadError(status, mutableResult, mutableUploadInfo);
+                            if (state->uploadInfo->showUploadDialog())
+                                LLUploadDialog::modalUploadFinished();
+                            return LLWorkResult::Complete;
+                        }
+
+                        LLSD finalResult = result;
+                        if (!finalResult.has("success"))
+                        {
+                            finalResult["success"] = LLSD::Boolean((ulstate == "complete") && status);
+                        }
+
+                        // Handle upload price
+                        S32 uploadPrice = finalResult["upload_price"].asInteger();
+                        if (uploadPrice > 0)
+                        {
+                            LLStatusBar::sendMoneyBalanceRequest();
+                            LLSD args;
+                            args["AMOUNT"] = llformat("%d", uploadPrice);
+                            LLNotificationsUtil::add("UploadPayment", args);
+                        }
+
+                        // Finish upload
+                        LLUUID serverInventoryItem = state->uploadInfo->finishUpload(finalResult);
+
+                        // Show inventory panel if requested
+                        if (state->uploadInfo->showInventoryPanel())
+                        {
+                            if (serverInventoryItem.notNull())
+                            {
+                                state->success = true;
+
+                                LLFocusableElement* focus = gFocusMgr.getKeyboardFocus();
+                                LLInventoryPanel* panel = LLInventoryPanel::getActiveInventoryPanel(false);
+                                LLInventoryPanel::openInventoryPanelAndSetSelection(true, serverInventoryItem, false, false, !panel);
+                                gFocusMgr.setKeyboardFocus(focus);
+                            }
+                            else
+                            {
+                                LL_WARNS("Upload") << "Can't find a folder to put it in" << LL_ENDL;
+                            }
+                        }
+
+                        // Handle snapshot floater notification
+                        LLFloater* floater_snapshot = LLFloaterReg::findInstance("snapshot");
+                        if (state->uploadInfo->getAssetType() == LLAssetType::AT_TEXTURE &&
+                            floater_snapshot && floater_snapshot->isShown())
+                        {
+                            floater_snapshot->notify(LLSD().with("set-finished",
+                                LLSD().with("ok", state->success).with("msg", "inventory")));
+                        }
+
+                        // Remove upload dialog
+                        if (state->uploadInfo->showUploadDialog())
+                            LLUploadDialog::modalUploadFinished();
+
+                        return LLWorkResult::Complete;
+                    },
+                    "upload-process-file",
+                    nullptr,
+                    LLExecutionType::MainThread
+                );
+
+                fileResult.graph->addDependency(fileResult.httpNode, processFileNode);
+                gWorkGraphManager.addGraph(fileResult.graph);
+                fileResult.graph->execute();
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "upload-file",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+    metadataResult.graph->addDependency(processMetadataNode, fileUploadNode);
+
+    // Register and execute the metadata graph
+    gWorkGraphManager.addGraph(metadataResult.graph);
+    metadataResult.graph->execute();
+
+    LL_DEBUGS("Upload") << "Work graph asset upload scheduled" << LL_ENDL;
 }
 
 //=========================================================================

@@ -202,7 +202,7 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
         return;
     }
 
-    LL_WARNS("LLAccountingCostManager") << "Fetching accounting costs for " << diffSet.size() << " objects" << LL_ENDL;
+    LL_DEBUGS("LLAccountingCostManager") << "Fetching accounting costs for " << diffSet.size() << " objects" << LL_ENDL;
 
     self->mObjectList.clear();
 
@@ -239,7 +239,7 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
         "AccountingCost", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
 
     // Make POST request and get the graph
-    LL_WARNS("LLAccountingCostManager") << "Posting accounting cost request to: " << url << LL_ENDL;
+    LL_DEBUGS("LLAccountingCostManager") << "Posting accounting cost request to: " << url << LL_ENDL;
     auto graphResult = httpAdapter->postRaw(url, dataToPost);
 
     // Add processing node that runs on main thread
@@ -247,14 +247,14 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
         [observerHandle, sharedResult = graphResult.result]() -> LLWorkResult {
             if (LLApp::isQuitting())
             {
-                LL_WARNS("LLAccountingCostManager") << "App is quitting, aborting accounting cost processing" << LL_ENDL;
+                LL_DEBUGS("LLAccountingCostManager") << "App is quitting, aborting accounting cost processing" << LL_ENDL;
                 LLAccountingCostManager::getInstance()->mPendingObjectQuota.clear();
                 return LLWorkResult::Complete;
             }
 
             if (observerHandle.isDead())
             {
-                LL_WARNS("LLAccountingCostManager") << "Observer handle is dead, aborting accounting cost processing" << LL_ENDL;
+                LL_DEBUGS("LLAccountingCostManager") << "Observer handle is dead, aborting accounting cost processing" << LL_ENDL;
                 LLAccountingCostManager::getInstance()->mPendingObjectQuota.clear();
                 return LLWorkResult::Complete;
             }
@@ -272,7 +272,7 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
             LLAccountingCostObserver* observer = observerHandle.get();
             if (!observer)
             {
-                LL_WARNS("LLAccountingCostManager") << "Observer is null, cannot process accounting cost results" << LL_ENDL;
+                LL_DEBUGS("LLAccountingCostManager") << "Observer is null, cannot process accounting cost results" << LL_ENDL;
                 LLAccountingCostManager::getInstance()->mPendingObjectQuota.clear();
                 return LLWorkResult::Complete;
             }
@@ -300,7 +300,7 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
 
                 if (!httpResults[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_SUCCESS].asBoolean())
                 {
-                    LL_WARNS("LLAccountingCostManager") << "Error result from HttpWorkGraphAdapter. Code "
+                    LL_DEBUGS("LLAccountingCostManager") << "Error result from HttpWorkGraphAdapter. Code "
                         << httpResults["status"] << ": '" << httpResults["message"] << "'" << LL_ENDL;
                     observer->setErrorStatus(httpResults["status"].asInteger(), httpResults["message"].asStringRef());
                     break;
@@ -317,7 +317,7 @@ void LLAccountingCostManager::accountingCostWorkGraph(std::string url,
 
                     SelectionCost selectionCost(physicsCost, networkCost, simulationCost);
 
-                    LL_WARNS("LLAccountingCostManager") << "Successfully retrieved accounting costs - "
+                    LL_DEBUGS("LLAccountingCostManager") << "Successfully retrieved accounting costs - "
                         << "Physics: " << physicsCost << ", "
                         << "Network: " << networkCost << ", "
                         << "Simulation: " << simulationCost << LL_ENDL;

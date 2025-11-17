@@ -34,11 +34,16 @@
 #include "llviewerinventory.h"
 #include "llcorehttputil.h"
 #include "llcoproceduremanager.h"
+#include "llworkgraphmanager.h"
 
 class AISAPI
 {
 public:
     static const S32 HTTP_TIMEOUT;
+
+    // A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+    static void setUseWorkGraph(bool useWorkGraph) { mUseWorkGraph = useWorkGraph; }
+    static bool getUseWorkGraph() { return mUseWorkGraph; }
     typedef enum {
         INVENTORY,
         LIBRARY
@@ -89,6 +94,9 @@ private:
     static const std::string INVENTORY_CAP_NAME;
     static const std::string LIBRARY_CAP_NAME;
 
+    // A/B Testing flag
+    static bool mUseWorkGraph;
+
     typedef boost::function < LLSD (LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t, LLCore::HttpRequest::ptr_t,
         const std::string, LLSD, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t) > invokationFn_t;
 
@@ -99,9 +107,27 @@ private:
     static std::string getInvCap();
     static std::string getLibCap();
 
+    // Coroutine-based implementation (existing)
     static void InvokeAISCommandCoro(LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t httpAdapter,
         invokationFn_t invoke, std::string url, LLUUID targetId, LLSD body,
         completion_t callback, COMMAND_TYPE type);
+
+    // Work graph-based implementations for each operation
+    static void CreateInventoryWorkGraph(const LLUUID& parentId, const LLSD& newInventory, completion_t callback);
+    static void SlamFolderWorkGraph(const LLUUID& folderId, const LLSD& newInventory, completion_t callback);
+    static void RemoveCategoryWorkGraph(const LLUUID &categoryId, completion_t callback);
+    static void RemoveItemWorkGraph(const LLUUID &itemId, completion_t callback);
+    static void PurgeDescendentsWorkGraph(const LLUUID &categoryId, completion_t callback);
+    static void UpdateCategoryWorkGraph(const LLUUID &categoryId, const LLSD &updates, completion_t callback);
+    static void UpdateItemWorkGraph(const LLUUID &itemId, const LLSD &updates, completion_t callback);
+    static void FetchItemWorkGraph(const LLUUID &itemId, ITEM_TYPE type, completion_t callback);
+    static void FetchCategoryChildrenWorkGraph(const LLUUID &catId, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth);
+    static void FetchCategoryCategoriesWorkGraph(const LLUUID &catId, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth);
+    static void FetchCategorySubsetWorkGraph(const LLUUID& catId, const uuid_vec_t specificChildren, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth);
+    static void FetchCOFWorkGraph(completion_t callback);
+    static void FetchCategoryLinksWorkGraph(const LLUUID &catId, completion_t callback);
+    static void FetchOrphansWorkGraph(completion_t callback);
+    static void CopyLibraryCategoryWorkGraph(const LLUUID& sourceId, const LLUUID& destId, bool copySubfolders, completion_t callback);
 
     typedef std::pair<std::string, LLCoprocedureManager::CoProcedure_t> ais_query_item_t;
     static std::list<ais_query_item_t> sPostponedQuery;

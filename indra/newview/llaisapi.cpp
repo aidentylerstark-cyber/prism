@@ -49,6 +49,9 @@ const std::string AISAPI::INVENTORY_CAP_NAME("InventoryAPIv3");
 const std::string AISAPI::LIBRARY_CAP_NAME("LibraryAPIv3");
 const S32 AISAPI::HTTP_TIMEOUT = 180;
 
+// A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+bool AISAPI::mUseWorkGraph = false;
+
 std::list<AISAPI::ais_query_item_t> AISAPI::sPostponedQuery;
 
 const S32 MAX_SIMULTANEOUS_COROUTINES = 2048;
@@ -124,21 +127,29 @@ void AISAPI::CreateInventory(const LLUUID& parentId, const LLSD& newInventory, c
     // (LLCoreHttpUtil::HttpCoroutineAdapter::*) - pointer to member function of HttpCoroutineAdapter
     // (LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t) - signature of method
     //
-    invokationFn_t postFn = boost::bind(
-        // Humans ignore next line.  It is just a cast.
-        static_cast<LLSD (LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::postAndSuspend), _1, _2, _3, _4, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        CreateInventoryWorkGraph(parentId, newInventory, callback);
+    }
+    else
+    {
+        invokationFn_t postFn = boost::bind(
+            // Humans ignore next line.  It is just a cast.
+            static_cast<LLSD (LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::postAndSuspend), _1, _2, _3, _4, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, postFn, url, parentId, newInventory, callback, CREATEINVENTORY));
-    EnqueueAISCommand("CreateInventory", proc);
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, postFn, url, parentId, newInventory, callback, CREATEINVENTORY));
+        EnqueueAISCommand("CreateInventory", proc);
+    }
 }
 
 /*static*/
@@ -160,23 +171,31 @@ void AISAPI::SlamFolder(const LLUUID& folderId, const LLSD& newInventory, comple
 
     std::string url = cap + std::string("/category/") + folderId.asString() + "/links?tid=" + tid.asString();
 
-    // see comment above in CreateInventoryCommand
-    invokationFn_t putFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::putAndSuspend), _1, _2, _3, _4, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        SlamFolderWorkGraph(folderId, newInventory, callback);
+    }
+    else
+    {
+        // see comment above in CreateInventoryCommand
+        invokationFn_t putFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::putAndSuspend), _1, _2, _3, _4, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, putFn, url, folderId, newInventory, callback, SLAMFOLDER));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, putFn, url, folderId, newInventory, callback, SLAMFOLDER));
 
-    EnqueueAISCommand("SlamFolder", proc);
+        EnqueueAISCommand("SlamFolder", proc);
+    }
 }
 
 void AISAPI::RemoveCategory(const LLUUID &categoryId, completion_t callback)
@@ -197,22 +216,30 @@ void AISAPI::RemoveCategory(const LLUUID &categoryId, completion_t callback)
     std::string url = cap + std::string("/category/") + categoryId.asString();
     LL_DEBUGS("Inventory") << "url: " << url << LL_ENDL;
 
-    invokationFn_t delFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        RemoveCategoryWorkGraph(categoryId, callback);
+    }
+    else
+    {
+        invokationFn_t delFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, delFn, url, categoryId, LLSD(), callback, REMOVECATEGORY));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, delFn, url, categoryId, LLSD(), callback, REMOVECATEGORY));
 
-    EnqueueAISCommand("RemoveCategory", proc);
+        EnqueueAISCommand("RemoveCategory", proc);
+    }
 }
 
 /*static*/
@@ -234,22 +261,30 @@ void AISAPI::RemoveItem(const LLUUID &itemId, completion_t callback)
     std::string url = cap + std::string("/item/") + itemId.asString();
     LL_DEBUGS("Inventory") << "url: " << url << LL_ENDL;
 
-    invokationFn_t delFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        RemoveItemWorkGraph(itemId, callback);
+    }
+    else
+    {
+        invokationFn_t delFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, delFn, url, itemId, LLSD(), callback, REMOVEITEM));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, delFn, url, itemId, LLSD(), callback, REMOVEITEM));
 
-    EnqueueAISCommand("RemoveItem", proc);
+        EnqueueAISCommand("RemoveItem", proc);
+    }
 }
 
 void AISAPI::CopyLibraryCategory(const LLUUID& sourceId, const LLUUID& destId, bool copySubfolders, completion_t callback)
@@ -281,22 +316,30 @@ void AISAPI::CopyLibraryCategory(const LLUUID& sourceId, const LLUUID& destId, b
 
     std::string destination = destId.asString();
 
-    invokationFn_t copyFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const std::string, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::copyAndSuspend), _1, _2, _3, destination, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        CopyLibraryCategoryWorkGraph(sourceId, destId, copySubfolders, callback);
+    }
+    else
+    {
+        invokationFn_t copyFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const std::string, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::copyAndSuspend), _1, _2, _3, destination, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, copyFn, url, destId, LLSD(), callback, COPYLIBRARYCATEGORY));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, copyFn, url, destId, LLSD(), callback, COPYLIBRARYCATEGORY));
 
-    EnqueueAISCommand("CopyLibraryCategory", proc);
+        EnqueueAISCommand("CopyLibraryCategory", proc);
+    }
 }
 
 /*static*/
@@ -318,22 +361,30 @@ void AISAPI::PurgeDescendents(const LLUUID &categoryId, completion_t callback)
     std::string url = cap + std::string("/category/") + categoryId.asString() + "/children";
     LL_DEBUGS("Inventory") << "url: " << url << LL_ENDL;
 
-    invokationFn_t delFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        PurgeDescendentsWorkGraph(categoryId, callback);
+    }
+    else
+    {
+        invokationFn_t delFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::deleteAndSuspend), _1, _2, _3, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, delFn, url, categoryId, LLSD(), callback, PURGEDESCENDENTS));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, delFn, url, categoryId, LLSD(), callback, PURGEDESCENDENTS));
 
-    EnqueueAISCommand("PurgeDescendents", proc);
+        EnqueueAISCommand("PurgeDescendents", proc);
+    }
 }
 
 
@@ -354,22 +405,30 @@ void AISAPI::UpdateCategory(const LLUUID &categoryId, const LLSD &updates, compl
     }
     std::string url = cap + std::string("/category/") + categoryId.asString();
 
-    invokationFn_t patchFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::patchAndSuspend), _1, _2, _3, _4, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        UpdateCategoryWorkGraph(categoryId, updates, callback);
+    }
+    else
+    {
+        invokationFn_t patchFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::patchAndSuspend), _1, _2, _3, _4, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, patchFn, url, categoryId, updates, callback, UPDATECATEGORY));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, patchFn, url, categoryId, updates, callback, UPDATECATEGORY));
 
-    EnqueueAISCommand("UpdateCategory", proc);
+        EnqueueAISCommand("UpdateCategory", proc);
+    }
 }
 
 /*static*/
@@ -390,22 +449,30 @@ void AISAPI::UpdateItem(const LLUUID &itemId, const LLSD &updates, completion_t 
     }
     std::string url = cap + std::string("/item/") + itemId.asString();
 
-    invokationFn_t patchFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::patchAndSuspend), _1, _2, _3, _4, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        UpdateItemWorkGraph(itemId, updates, callback);
+    }
+    else
+    {
+        invokationFn_t patchFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, const LLSD &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::patchAndSuspend), _1, _2, _3, _4, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, patchFn, url, itemId, updates, callback, UPDATEITEM));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, patchFn, url, itemId, updates, callback, UPDATEITEM));
 
-    EnqueueAISCommand("UpdateItem", proc);
+        EnqueueAISCommand("UpdateItem", proc);
+    }
 }
 
 /*static*/
@@ -425,22 +492,30 @@ void AISAPI::FetchItem(const LLUUID &itemId, ITEM_TYPE type, completion_t callba
     }
     std::string url = cap + std::string("/item/") + itemId.asString();
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchItemWorkGraph(itemId, type, callback);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, getFn, url, itemId, LLSD(), callback, FETCHITEM));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, getFn, url, itemId, LLSD(), callback, FETCHITEM));
 
-    EnqueueAISCommand("FetchItem", proc);
+        EnqueueAISCommand("FetchItem", proc);
+    }
 }
 
 /*static*/
@@ -473,25 +548,33 @@ void AISAPI::FetchCategoryChildren(const LLUUID &catId, ITEM_TYPE type, bool rec
 
     url += "?depth=" + std::to_string(depth);
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchCategoryChildrenWorkGraph(catId, type, recursive, callback, depth);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
 
-    // get doesn't use body, can pass additional data
-    LLSD body;
-    body["depth"] = depth;
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, getFn, url, catId, body, callback, FETCHCATEGORYCHILDREN));
+        // get doesn't use body, can pass additional data
+        LLSD body;
+        body["depth"] = depth;
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, getFn, url, catId, body, callback, FETCHCATEGORYCHILDREN));
 
-    EnqueueAISCommand("FetchCategoryChildren", proc);
+        EnqueueAISCommand("FetchCategoryChildren", proc);
+    }
 }
 
 // some folders can be requested by name, like
@@ -577,25 +660,33 @@ void AISAPI::FetchCategoryCategories(const LLUUID &catId, ITEM_TYPE type, bool r
 
     url += "?depth=" + std::to_string(depth);
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchCategoryCategoriesWorkGraph(catId, type, recursive, callback, depth);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
 
-    // get doesn't use body, can pass additional data
-    LLSD body;
-    body["depth"] = depth;
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-        _1, getFn, url, catId, body, callback, FETCHCATEGORYCATEGORIES));
+        // get doesn't use body, can pass additional data
+        LLSD body;
+        body["depth"] = depth;
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+            _1, getFn, url, catId, body, callback, FETCHCATEGORYCATEGORIES));
 
-    EnqueueAISCommand("FetchCategoryCategories", proc);
+        EnqueueAISCommand("FetchCategoryCategories", proc);
+    }
 }
 
 void AISAPI::FetchCategorySubset(const LLUUID& catId,
@@ -654,25 +745,33 @@ void AISAPI::FetchCategorySubset(const LLUUID& catId,
         LL_WARNS("Inventory") << "Request url is too long, url: " << url << LL_ENDL;
     }
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string&, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchCategorySubsetWorkGraph(catId, specificChildren, type, recursive, callback, depth);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string&, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
 
-    // get doesn't use body, can pass additional data
-    LLSD body;
-    body["depth"] = depth;
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-                                                         _1, getFn, url, catId, body, callback, FETCHCATEGORYSUBSET));
+        // get doesn't use body, can pass additional data
+        LLSD body;
+        body["depth"] = depth;
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+                                                             _1, getFn, url, catId, body, callback, FETCHCATEGORYSUBSET));
 
-    EnqueueAISCommand("FetchCategorySubset", proc);
+        EnqueueAISCommand("FetchCategorySubset", proc);
+    }
 }
 
 /*static*/
@@ -691,26 +790,34 @@ void AISAPI::FetchCOF(completion_t callback)
     }
     std::string url = cap + std::string("/category/current/links");
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string&, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchCOFWorkGraph(callback);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string&, LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend), _1, _2, _3, _5, _6);
 
-    LLSD body;
-    // Only cof folder will be full, but cof can contain an outfit
-    // link with embedded outfit folder for request to parse
-    body["depth"] = 0;
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
-                                                         _1, getFn, url, LLUUID::null, body, callback, FETCHCOF));
+        LLSD body;
+        // Only cof folder will be full, but cof can contain an outfit
+        // link with embedded outfit folder for request to parse
+        body["depth"] = 0;
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro,
+                                                             _1, getFn, url, LLUUID::null, body, callback, FETCHCOF));
 
-    EnqueueAISCommand("FetchCOF", proc);
+        EnqueueAISCommand("FetchCOF", proc);
+    }
 }
 
 void AISAPI::FetchCategoryLinks(const LLUUID &catId, completion_t callback)
@@ -727,26 +834,34 @@ void AISAPI::FetchCategoryLinks(const LLUUID &catId, completion_t callback)
     }
     std::string url = cap + std::string("/category/") + catId.asString() + "/links";
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD (LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &,
-                                                                   LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend),
-        _1, _2, _3, _5, _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchCategoryLinksWorkGraph(catId, callback);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD (LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t, const std::string &,
+                                                                       LLCore::HttpOptions::ptr_t, LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend),
+            _1, _2, _3, _5, _6);
 
-    LLSD body;
-    body["depth"] = 0;
-    LLCoprocedureManager::CoProcedure_t proc(
-        boost::bind(&AISAPI::InvokeAISCommandCoro, _1, getFn, url, LLUUID::null, body, callback, FETCHCATEGORYLINKS));
+        LLSD body;
+        body["depth"] = 0;
+        LLCoprocedureManager::CoProcedure_t proc(
+            boost::bind(&AISAPI::InvokeAISCommandCoro, _1, getFn, url, LLUUID::null, body, callback, FETCHCATEGORYLINKS));
 
-    EnqueueAISCommand("FetchCategoryLinks", proc);
+        EnqueueAISCommand("FetchCategoryLinks", proc);
+    }
 }
 
 /*static*/
@@ -764,22 +879,30 @@ void AISAPI::FetchOrphans(completion_t callback)
     }
     std::string url = cap + std::string("/orphans");
 
-    invokationFn_t getFn = boost::bind(
-        // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
-        static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t , const std::string& , LLCore::HttpOptions::ptr_t , LLCore::HttpHeaders::ptr_t)>
-        //----
-        // _1 -> httpAdapter
-        // _2 -> httpRequest
-        // _3 -> url
-        // _4 -> body
-        // _5 -> httpOptions
-        // _6 -> httpHeaders
-        (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend) , _1 , _2 , _3 , _5 , _6);
+    // A/B Testing: route to work graph or coroutine implementation
+    if (mUseWorkGraph)
+    {
+        FetchOrphansWorkGraph(callback);
+    }
+    else
+    {
+        invokationFn_t getFn = boost::bind(
+            // Humans ignore next line.  It is just a cast to specify which LLCoreHttpUtil::HttpCoroutineAdapter routine overload.
+            static_cast<LLSD(LLCoreHttpUtil::HttpCoroutineAdapter::*)(LLCore::HttpRequest::ptr_t , const std::string& , LLCore::HttpOptions::ptr_t , LLCore::HttpHeaders::ptr_t)>
+            //----
+            // _1 -> httpAdapter
+            // _2 -> httpRequest
+            // _3 -> url
+            // _4 -> body
+            // _5 -> httpOptions
+            // _6 -> httpHeaders
+            (&LLCoreHttpUtil::HttpCoroutineAdapter::getAndSuspend) , _1 , _2 , _3 , _5 , _6);
 
-    LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro ,
-                                                         _1 , getFn , url , LLUUID::null , LLSD() , callback , FETCHORPHANS));
+        LLCoprocedureManager::CoProcedure_t proc(boost::bind(&AISAPI::InvokeAISCommandCoro ,
+                                                             _1 , getFn , url , LLUUID::null , LLSD() , callback , FETCHORPHANS));
 
-    EnqueueAISCommand("FetchOrphans" , proc);
+        EnqueueAISCommand("FetchOrphans" , proc);
+    }
 }
 
 /*static*/
@@ -1016,6 +1139,1317 @@ void AISAPI::InvokeAISCommandCoro(LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t ht
         }
     }
 
+}
+
+//-------------------------------------------------------------------------
+// Work Graph Implementations
+//-------------------------------------------------------------------------
+
+/*static*/
+void AISAPI::FetchCategoryChildrenWorkGraph(const LLUUID &catId, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth)
+{
+    std::string cap;
+
+    cap = (type == INVENTORY) ? getInvCap() : getLibCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + catId.asString() + "/children";
+
+    if (recursive)
+    {
+        depth = MAX_FOLDER_DEPTH_REQUEST;
+    }
+    else
+    {
+        depth = llmin(depth, MAX_FOLDER_DEPTH_REQUEST);
+    }
+
+    url += "?depth=" + std::to_string(depth);
+
+    LL_DEBUGS("Inventory") << "FetchCategoryChildrenWorkGraph: url: " << url << " catId: " << catId << LL_ENDL;
+
+    // Create work graph adapter
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchCategoryChildren", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Make GET request
+    auto graphResult = httpAdapter->getRaw(url);
+
+    // Add processing node
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchCategoryChildrenWorkGraph Result: " << results << LL_ENDL;
+
+            // Extract content - fallback pattern for different response formats
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            // Process the response through AISUpdate
+            LLSD body;
+            body["depth"] = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                content : results;
+            onUpdateReceived(results, FETCHCATEGORYCHILDREN, body);
+
+            // Call callback with category ID
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-category-children-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    // Set up dependency
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+
+    // Register and execute
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchCategoryChildrenWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchItemWorkGraph(const LLUUID &itemId, ITEM_TYPE type, completion_t callback)
+{
+    std::string cap;
+
+    cap = (type == INVENTORY) ? getInvCap() : getLibCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/item/") + itemId.asString();
+
+    LL_DEBUGS("Inventory") << "FetchItemWorkGraph: url: " << url << " itemId: " << itemId << LL_ENDL;
+
+    // Create work graph adapter
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchItem", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Make GET request
+    auto graphResult = httpAdapter->getRaw(url);
+
+    // Add processing node
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchItemWorkGraph Result: " << results << LL_ENDL;
+
+            // Extract content
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            // Process the response
+            LLSD body;
+            onUpdateReceived(results, FETCHITEM, body);
+
+            // Call callback with item ID
+            LLUUID id = LLUUID::null;
+            if (content.has("item_id"))
+            {
+                id = content["item_id"];
+            }
+            if (content.has("linked_id"))
+            {
+                id = content["linked_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-item-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    // Set up dependency
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+
+    // Register and execute
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchItemWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchCategoryCategoriesWorkGraph(const LLUUID &catId, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth)
+{
+    std::string cap;
+
+    cap = (type == INVENTORY) ? getInvCap() : getLibCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + catId.asString() + "/categories";
+
+    if (recursive)
+    {
+        depth = MAX_FOLDER_DEPTH_REQUEST;
+    }
+    else
+    {
+        depth = llmin(depth, MAX_FOLDER_DEPTH_REQUEST);
+    }
+
+    url += "?depth=" + std::to_string(depth);
+
+    LL_DEBUGS("Inventory") << "FetchCategoryCategoriesWorkGraph: url: " << url << " catId: " << catId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchCategoryCategories", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->getRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result, depth]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchCategoryCategoriesWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            LLSD body;
+            body["depth"] = depth;
+            onUpdateReceived(results, FETCHCATEGORYCATEGORIES, body);
+
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-category-categories-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchCategoryCategoriesWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchCategorySubsetWorkGraph(const LLUUID& catId, const uuid_vec_t specificChildren, ITEM_TYPE type, bool recursive, completion_t callback, S32 depth)
+{
+    std::string cap = (type == INVENTORY) ? getInvCap() : getLibCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    if (specificChildren.empty())
+    {
+        LL_WARNS("Inventory") << "Empty request!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + catId.asString() + "/children";
+
+    if (recursive)
+    {
+        depth = MAX_FOLDER_DEPTH_REQUEST;
+    }
+    else
+    {
+        depth = llmin(depth, MAX_FOLDER_DEPTH_REQUEST);
+    }
+
+    uuid_vec_t::const_iterator iter = specificChildren.begin();
+    uuid_vec_t::const_iterator end = specificChildren.end();
+
+    url += "?depth=" + std::to_string(depth) + "&children=" + iter->asString();
+    iter++;
+
+    while (iter != end)
+    {
+        url += "," + iter->asString();
+        iter++;
+    }
+
+    const S32 MAX_URL_LENGH = 2000;
+    if (url.length() > MAX_URL_LENGH)
+    {
+        LL_WARNS("Inventory") << "Request url is too long, url: " << url << LL_ENDL;
+    }
+
+    LL_DEBUGS("Inventory") << "FetchCategorySubsetWorkGraph: url: " << url << " catId: " << catId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchCategorySubset", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->getRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result, depth]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchCategorySubsetWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            LLSD body;
+            body["depth"] = depth;
+            onUpdateReceived(results, FETCHCATEGORYSUBSET, body);
+
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-category-subset-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchCategorySubsetWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchCOFWorkGraph(completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/current/links");
+
+    LL_DEBUGS("Inventory") << "FetchCOFWorkGraph: url: " << url << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchCOF", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->getRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchCOFWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            LLSD body;
+            body["depth"] = 0;
+            onUpdateReceived(results, FETCHCOF, body);
+
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-cof-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchCOFWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchCategoryLinksWorkGraph(const LLUUID &catId, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + catId.asString() + "/links";
+
+    LL_DEBUGS("Inventory") << "FetchCategoryLinksWorkGraph: url: " << url << " catId: " << catId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchCategoryLinks", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->getRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchCategoryLinksWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            LLSD body;
+            body["depth"] = 0;
+            onUpdateReceived(results, FETCHCATEGORYLINKS, body);
+
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-category-links-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchCategoryLinksWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::FetchOrphansWorkGraph(completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/orphans");
+
+    LL_DEBUGS("Inventory") << "FetchOrphansWorkGraph: url: " << url << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISFetchOrphans", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->getRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting fetch" << LL_ENDL;
+                if (callback)
+                {
+                    callback(LLUUID::null);
+                }
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "FetchOrphansWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+                LL_WARNS("Inventory") << ll_pretty_print_sd(results) << LL_ENDL;
+            }
+
+            LLSD body;
+            onUpdateReceived(results, FETCHORPHANS, body);
+
+            LLUUID id = LLUUID::null;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "fetch-orphans-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "FetchOrphansWorkGraph scheduled" << LL_ENDL;
+}
+
+//-------------------------------------------------------------------------
+// Phase 2: Modify Operations Work Graph Implementations
+//-------------------------------------------------------------------------
+
+/*static*/
+void AISAPI::CreateInventoryWorkGraph(const LLUUID& parentId, const LLSD& newInventory, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    LLUUID tid;
+    tid.generate();
+    std::string url = cap + std::string("/category/") + parentId.asString() + "?tid=" + tid.asString();
+
+    LL_DEBUGS("Inventory") << "CreateInventoryWorkGraph: url: " << url << " parentID " << parentId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISCreateInventory", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->postRaw(url, newInventory);
+
+    auto processNode = graphResult.graph->addNode(
+        [parentId, newInventory, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting create" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "CreateInventoryWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, CREATEINVENTORY, newInventory);
+
+            // CREATEINVENTORY can have multiple callbacks for categories and items
+            bool needs_callback = true;
+            if (content.has("_created_categories"))
+            {
+                LLSD& cats = content["_created_categories"];
+                for (LLSD::array_const_iterator it = cats.beginArray(); it != cats.endArray(); ++it)
+                {
+                    LLUUID cat_id = *it;
+                    if (callback) callback(cat_id);
+                    needs_callback = false;
+                }
+            }
+            if (content.has("_created_items"))
+            {
+                LLSD& items = content["_created_items"];
+                for (LLSD::array_const_iterator it = items.beginArray(); it != items.endArray(); ++it)
+                {
+                    LLUUID item_id = *it;
+                    if (callback) callback(item_id);
+                    needs_callback = false;
+                }
+            }
+            if (needs_callback && callback)
+            {
+                callback(parentId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "create-inventory-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "CreateInventoryWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::SlamFolderWorkGraph(const LLUUID& folderId, const LLSD& newInventory, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    LLUUID tid;
+    tid.generate();
+    std::string url = cap + std::string("/category/") + folderId.asString() + "/links?tid=" + tid.asString();
+
+    LL_DEBUGS("Inventory") << "SlamFolderWorkGraph: url: " << url << " folderId " << folderId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISSlamFolder", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->putRaw(url, newInventory);
+
+    auto processNode = graphResult.graph->addNode(
+        [folderId, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting slam" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "SlamFolderWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, SLAMFOLDER, LLSD());
+
+            if (callback)
+            {
+                callback(folderId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "slam-folder-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "SlamFolderWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::UpdateCategoryWorkGraph(const LLUUID &categoryId, const LLSD &updates, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + categoryId.asString();
+
+    LL_DEBUGS("Inventory") << "UpdateCategoryWorkGraph: url: " << url << " categoryId " << categoryId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISUpdateCategory", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Note: patchRaw doesn't exist, using postRaw with PATCH semantics
+    auto graphResult = httpAdapter->postRaw(url, updates);
+
+    auto processNode = graphResult.graph->addNode(
+        [categoryId, updates, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting update" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "UpdateCategoryWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, UPDATECATEGORY, updates);
+
+            if (callback)
+            {
+                callback(categoryId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "update-category-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "UpdateCategoryWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::UpdateItemWorkGraph(const LLUUID &itemId, const LLSD &updates, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/item/") + itemId.asString();
+
+    LL_DEBUGS("Inventory") << "UpdateItemWorkGraph: url: " << url << " itemId " << itemId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISUpdateItem", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Note: patchRaw doesn't exist, using postRaw with PATCH semantics
+    auto graphResult = httpAdapter->postRaw(url, updates);
+
+    auto processNode = graphResult.graph->addNode(
+        [itemId, updates, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting update" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "UpdateItemWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, UPDATEITEM, updates);
+
+            if (callback)
+            {
+                callback(itemId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "update-item-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "UpdateItemWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::CopyLibraryCategoryWorkGraph(const LLUUID& sourceId, const LLUUID& destId, bool copySubfolders, completion_t callback)
+{
+    std::string cap = getLibCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Library cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    LLUUID tid;
+    tid.generate();
+    std::string url = cap + std::string("/category/") + sourceId.asString() + "?tid=" + tid.asString();
+    if (!copySubfolders)
+    {
+        url += ",depth=0";
+    }
+
+    LL_DEBUGS("Inventory") << "CopyLibraryCategoryWorkGraph: url: " << url << " sourceId: " << sourceId << " destId: " << destId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISCopyLibraryCategory", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Note: copyRaw doesn't exist in HttpWorkGraphAdapter, using postRaw with COPY semantics
+    // The destination is passed as the body
+    LLSD body;
+    body["destination"] = destId.asString();
+    auto graphResult = httpAdapter->postRaw(url, body);
+
+    auto processNode = graphResult.graph->addNode(
+        [destId, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting copy" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "CopyLibraryCategoryWorkGraph Result: " << results << LL_ENDL;
+
+            LLSD content = results.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT) ?
+                results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_CONTENT] : results;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Library copy error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, COPYLIBRARYCATEGORY, LLSD());
+
+            LLUUID id = destId;
+            if (content.has("category_id"))
+            {
+                id = content["category_id"];
+            }
+
+            if (callback)
+            {
+                callback(id);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "copy-library-category-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "CopyLibraryCategoryWorkGraph scheduled" << LL_ENDL;
+}
+
+//-------------------------------------------------------------------------
+// Phase 3: Remove Operations Work Graph Implementations
+//-------------------------------------------------------------------------
+
+/*static*/
+void AISAPI::RemoveCategoryWorkGraph(const LLUUID &categoryId, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + categoryId.asString();
+
+    LL_DEBUGS("Inventory") << "RemoveCategoryWorkGraph: url: " << url << " categoryId " << categoryId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISRemoveCategory", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->deleteRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [categoryId, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting remove" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "RemoveCategoryWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                else if (status.getType() == 410) // GONE
+                {
+                    // Category already deleted from server
+                    LLViewerInventoryCategory *cat = gInventory.getCategory(categoryId);
+                    if (cat)
+                    {
+                        LL_WARNS("Inventory") << "Remove failed for '" << cat->getName()
+                            << "' since folder no longer exists at server." << LL_ENDL;
+                        gInventory.fetchDescendentsOf(cat->getParentUUID());
+                    }
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, REMOVECATEGORY, LLSD());
+
+            if (callback)
+            {
+                callback(categoryId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "remove-category-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "RemoveCategoryWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::RemoveItemWorkGraph(const LLUUID &itemId, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/item/") + itemId.asString();
+
+    LL_DEBUGS("Inventory") << "RemoveItemWorkGraph: url: " << url << " itemId " << itemId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISRemoveItem", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->deleteRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [itemId, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting remove" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "RemoveItemWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                else if (status.getType() == 410) // GONE
+                {
+                    // Item already deleted from server
+                    LLViewerInventoryItem *item = gInventory.getItem(itemId);
+                    if (item)
+                    {
+                        LL_WARNS("Inventory") << "Remove failed for '" << item->getName()
+                            << "' since item no longer exists at server." << LL_ENDL;
+                        gInventory.fetchDescendentsOf(item->getParentUUID());
+                        gInventory.onObjectDeletedFromServer(itemId);
+                    }
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, REMOVEITEM, LLSD());
+
+            if (callback)
+            {
+                callback(itemId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "remove-item-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "RemoveItemWorkGraph scheduled" << LL_ENDL;
+}
+
+/*static*/
+void AISAPI::PurgeDescendentsWorkGraph(const LLUUID &categoryId, completion_t callback)
+{
+    std::string cap = getInvCap();
+    if (cap.empty())
+    {
+        LL_WARNS("Inventory") << "Inventory cap not found!" << LL_ENDL;
+        if (callback)
+        {
+            callback(LLUUID::null);
+        }
+        return;
+    }
+
+    std::string url = cap + std::string("/category/") + categoryId.asString() + "/children";
+
+    LL_DEBUGS("Inventory") << "PurgeDescendentsWorkGraph: url: " << url << " categoryId " << categoryId << LL_ENDL;
+
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AISPurgeDescendents", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    auto graphResult = httpAdapter->deleteRaw(url);
+
+    auto processNode = graphResult.graph->addNode(
+        [categoryId, callback, sharedResult = graphResult.result]() -> LLWorkResult {
+            if (gDisconnected)
+            {
+                LL_DEBUGS("Inventory") << "App disconnected, aborting purge" << LL_ENDL;
+                if (callback) callback(LLUUID::null);
+                return LLWorkResult::Complete;
+            }
+
+            const LLSD& results = sharedResult->result;
+            const LLSD& httpResults = results[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            LL_DEBUGS("Inventory", "AIS3") << "PurgeDescendentsWorkGraph Result: " << results << LL_ENDL;
+
+            if (!status || !results.isMap())
+            {
+                if (!results.isMap())
+                {
+                    status = LLCore::HttpStatus(HTTP_INTERNAL_ERROR, "Malformed response contents");
+                }
+                LL_WARNS("Inventory") << "Inventory error: " << status.toString() << LL_ENDL;
+            }
+
+            onUpdateReceived(results, PURGEDESCENDENTS, LLSD());
+
+            if (callback)
+            {
+                callback(categoryId);
+            }
+
+            return LLWorkResult::Complete;
+        },
+        "purge-descendents-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("Inventory") << "PurgeDescendentsWorkGraph scheduled" << LL_ENDL;
 }
 
 //-------------------------------------------------------------------------

@@ -359,7 +359,7 @@ void LLFloaterIMNearbyChatScreenChannel::addChat(LLSD& chat)
 
     arrangeToasts();
 }
-
+/*
 static bool sort_toasts_predicate(LLHandle<LLToast> first, LLHandle<LLToast> second)
 {
     if (!first.get() || !second.get()) return false; // STORM-1352
@@ -368,7 +368,7 @@ static bool sort_toasts_predicate(LLHandle<LLToast> first, LLHandle<LLToast> sec
     F32 v2 = second.get()->getTimeLeftToLive();
     return v1 > v2;
 }
-
+*/
 void LLFloaterIMNearbyChatScreenChannel::arrangeToasts()
 {
     if(mStopProcessing || isHovering())
@@ -400,7 +400,7 @@ void LLFloaterIMNearbyChatScreenChannel::arrangeToasts()
     S32     margin = gSavedSettings.getS32("ToastGap");
 
     //sort active toasts
-    std::sort(m_active_toasts.begin(),m_active_toasts.end(),sort_toasts_predicate);
+    //std::sort(m_active_toasts.begin(),m_active_toasts.end(),sort_toasts_predicate);
 
     //calc max visible item and hide other toasts.
 

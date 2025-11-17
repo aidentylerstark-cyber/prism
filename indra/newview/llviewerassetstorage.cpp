@@ -43,6 +43,7 @@
 #include "lleventcoro.h"
 #include "llsdutil.h"
 #include "llworld.h"
+#include "llworkgraphmanager.h"
 
 ///----------------------------------------------------------------------------
 /// LLViewerAssetRequest
@@ -395,18 +396,27 @@ void LLViewerAssetStorage::queueRequestHttp(
     // This is the same as the current UDP logic - don't re-request a duplicate.
     if (!duplicate)
     {
-        LLCoprocedureManager* manager = LLCoprocedureManager::getInstance();
         bool with_http = true;
         bool is_temp = false;
         LLViewerAssetStatsFF::record_enqueue(atype, with_http, is_temp);
-        manager->enqueueCoprocedure(
-            VIEWER_ASSET_STORAGE_CORO_POOL,
-            "LLViewerAssetStorage::assetRequestCoro",
-            [this, uuid, atype, callback, user_data]
-            (LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t&, const LLUUID&)
-            {
-                assetRequestCoro(uuid, atype, callback, user_data);
-            });
+
+        // A/B Testing: route to work graph or coroutine implementation
+        if (mUseWorkGraph)
+        {
+            assetRequestWorkGraph(uuid, atype, callback, user_data);
+        }
+        else
+        {
+            LLCoprocedureManager* manager = LLCoprocedureManager::getInstance();
+            manager->enqueueCoprocedure(
+                VIEWER_ASSET_STORAGE_CORO_POOL,
+                "LLViewerAssetStorage::assetRequestCoro",
+                [this, uuid, atype, callback, user_data]
+                (LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t&, const LLUUID&)
+                {
+                    assetRequestCoro(uuid, atype, callback, user_data);
+                });
+        }
     }
 }
 
@@ -584,6 +594,161 @@ void LLViewerAssetStorage::assetRequestCoro(
 
     // Clean up pending downloads and trigger callbacks
     removeAndCallbackPendingDownloads(uuid, atype, uuid, atype, result_code, ext_status, bytes_fetched);
+}
+
+void LLViewerAssetStorage::assetRequestWorkGraph(
+    const LLUUID uuid,
+    LLAssetType::EType atype,
+    LLGetAssetCallback callback,
+    void *user_data)
+{
+    LL_DEBUGS("ViewerAsset") << "Work graph asset request " << uuid
+                             << " type " << LLAssetType::lookup(atype) << LL_ENDL;
+
+    mCountStarted++;
+
+    // Validation checks (main thread)
+    if (!gAssetStorage)
+    {
+        LL_WARNS_ONCE("ViewerAsset") << "Asset request fails: asset storage no longer exists" << LL_ENDL;
+        return;
+    }
+
+    if (!gAgent.getRegion())
+    {
+        LL_WARNS_ONCE("ViewerAsset") << "Asset request fails: no region set" << LL_ENDL;
+        S32 result_code = LL_ERR_ASSET_REQUEST_FAILED;
+        LLExtStat ext_status = LLExtStat::NONE;
+        removeAndCallbackPendingDownloads(uuid, atype, uuid, atype, result_code, ext_status, 0);
+        return;
+    }
+
+    // Get capabilities URL
+    std::string viewerAssetUrl = mViewerAssetUrl;
+    if (viewerAssetUrl.empty() && gAgent.getRegion())
+    {
+        viewerAssetUrl = gAgent.getRegion()->getViewerAssetUrl();
+    }
+
+    if (viewerAssetUrl.empty())
+    {
+        LL_WARNS_ONCE("ViewerAsset") << "Asset request fails: no viewer asset cap found" << LL_ENDL;
+        S32 result_code = LL_ERR_ASSET_REQUEST_FAILED;
+        LLExtStat ext_status = LLExtStat::NONE;
+        removeAndCallbackPendingDownloads(uuid, atype, uuid, atype, result_code, ext_status, 0);
+        return;
+    }
+
+    std::string url = getAssetURL(viewerAssetUrl, uuid, atype);
+    LL_DEBUGS("ViewerAsset") << "Work graph request url: " << url << LL_ENDL;
+
+    // Create HTTP adapter
+    LLCore::HttpRequest::policy_t httpPolicy(LLAppCoreHttp::AP_TEXTURE);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpWorkGraphAdapter>(
+        "AssetDownload", httpPolicy, LLAppViewer::instance()->getMainAppGroup());
+
+    // Schedule HTTP GET
+    auto graphResult = httpAdapter->getRaw(url);
+
+    // Add processing node (executed on main thread)
+    auto processNode = graphResult.graph->addNode(
+        [this, uuid, atype, callback, sharedResult = graphResult.result]() -> LLWorkResult
+        {
+            // Check for app shutdown
+            if (LLApp::isExiting() || !gAssetStorage)
+            {
+                LL_DEBUGS("ViewerAsset") << "App exiting, aborting asset download" << LL_ENDL;
+                return LLWorkResult::Complete;
+            }
+
+            mCountCompleted++;
+
+            const LLSD& result = sharedResult->result;
+            const LLSD& httpResults = result[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS];
+            LLCore::HttpStatus status = LLCoreHttpUtil::HttpWorkGraphAdapter::getStatusFromLLSD(httpResults);
+
+            S32 result_code = LL_ERR_NOERR;
+            LLExtStat ext_status = LLExtStat::NONE;
+            S32 bytes_fetched = 0;
+
+            if (!status)
+            {
+                LL_DEBUGS("ViewerAsset") << "Request failed, status " << status.toTerseString() << LL_ENDL;
+                result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                ext_status = LLExtStat::NONE;
+            }
+            else if (!result.has(LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_RAW))
+            {
+                LL_DEBUGS("ViewerAsset") << "Request failed, no data returned!" << LL_ENDL;
+                result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                ext_status = LLExtStat::NONE;
+            }
+            else if (!result[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_RAW].isBinary())
+            {
+                LL_DEBUGS("ViewerAsset") << "Request failed, invalid data format!" << LL_ENDL;
+                result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                ext_status = LLExtStat::NONE;
+            }
+            else
+            {
+                LL_DEBUGS("ViewerAsset") << "Request succeeded" << LL_ENDL;
+
+                const LLSD::Binary &raw = result[LLCoreHttpUtil::HttpWorkGraphAdapter::HTTP_RESULTS_RAW].asBinary();
+                S32 size = static_cast<S32>(raw.size());
+
+                if (size > 0)
+                {
+                    mTotalBytesFetched += size;
+
+                    // Create temp file and rename (same as coroutine version)
+                    LLUUID temp_id;
+                    temp_id.generate();
+                    LLFileSystem vf(temp_id, atype, LLFileSystem::WRITE);
+                    bytes_fetched = size;
+
+                    if (!vf.write(raw.data(), size))
+                    {
+                        LL_WARNS("ViewerAsset") << "Failure in vf.write()" << LL_ENDL;
+                        result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                        ext_status = LLExtStat::CACHE_CORRUPT;
+                    }
+                    else if (!vf.rename(uuid, atype))
+                    {
+                        LL_WARNS("ViewerAsset") << "Rename failed" << LL_ENDL;
+                        result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                        ext_status = LLExtStat::CACHE_CORRUPT;
+                    }
+                    else
+                    {
+                        mCountSucceeded++;
+                    }
+                }
+                else
+                {
+                    LL_WARNS("ViewerAsset") << "Bad size" << LL_ENDL;
+                    result_code = LL_ERR_ASSET_REQUEST_FAILED;
+                    ext_status = LLExtStat::NONE;
+                }
+            }
+
+            // Clean up pending downloads and trigger callbacks (main thread)
+            removeAndCallbackPendingDownloads(uuid, atype, uuid, atype, result_code, ext_status, bytes_fetched);
+
+            return LLWorkResult::Complete;
+        },
+        "asset-download-process",
+        nullptr,
+        LLExecutionType::MainThread
+    );
+
+    // Link HTTP node to processing node
+    graphResult.graph->addDependency(graphResult.httpNode, processNode);
+
+    // Register and execute the graph
+    gWorkGraphManager.addGraph(graphResult.graph);
+    graphResult.graph->execute();
+
+    LL_DEBUGS("ViewerAsset") << "Work graph asset download scheduled" << LL_ENDL;
 }
 
 std::string LLViewerAssetStorage::getAssetURL(const std::string& cap_url, const LLUUID& uuid, LLAssetType::EType atype)

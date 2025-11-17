@@ -40,6 +40,7 @@
 #include "llviewertexturelist.h"
 #include "llgroupmgr.h"
 #include "llagent.h"
+#include "llaisapi.h"
 #include "llagentcamera.h"
 #include "llagentlanguage.h"
 #include "llagentui.h"
@@ -1375,7 +1376,7 @@ bool LLAppViewer::doFrame()
     if (gWorkService->hasMainThreadWork())
     {
         // Just use some arbitrary number for now to determine how many work contracts to try and execute per frame on the main thread.
-        gWorkService->executeMainThreadWork(1);
+        gWorkService->executeMainThreadWork(10);
     }
 
     LL_RECORD_BLOCK_TIME(FTM_FRAME);
@@ -1554,7 +1555,7 @@ bool LLAppViewer::doFrame()
             if (gWorkService->hasMainThreadWork())
             {
                 // Just use some arbitrary number for now to determine how many work contracts to try and execute per frame on the main thread.
-                gWorkService->executeMainThreadWork(1);
+                gWorkService->executeMainThreadWork(10);
             }
         }
 
@@ -2207,6 +2208,8 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Goodbye!" << LL_ENDL;
 
     removeDumpDir();
+    
+    gWorkService->stop();
 
     // return 0;
     return true;
@@ -5977,6 +5980,25 @@ void LLAppViewer::propagateWorkGraphSetting()
     {
         LLAccountingCostManager::instance().setUseWorkGraph(useWorkGraphs);
     }
+
+    // LLIMView is a namespace, not a singleton
+    LLIMView::setUseWorkGraphs(useWorkGraphs);
+
+    // AISAPI is a static class with static methods
+    AISAPI::setUseWorkGraph(useWorkGraphs);
+
+    // Asset storage - need to downcast from LLAssetStorage base class
+    if (gAssetStorage)
+    {
+        LLViewerAssetStorage* viewerAssetStorage = dynamic_cast<LLViewerAssetStorage*>(gAssetStorage);
+        if (viewerAssetStorage)
+        {
+            viewerAssetStorage->setUseWorkGraph(useWorkGraphs);
+        }
+    }
+
+    // Asset upload - static class with static methods
+    LLViewerAssetUpload::setUseWorkGraph(useWorkGraphs);
 }
 
 //virtual

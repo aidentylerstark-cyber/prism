@@ -283,11 +283,20 @@ private:
 class LLViewerAssetUpload
 {
 public:
+    // A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+    static void setUseWorkGraph(bool useWorkGraph) { mUseWorkGraph = useWorkGraph; }
+    static bool getUseWorkGraph() { return mUseWorkGraph; }
+
     static LLUUID EnqueueInventoryUpload(const std::string &url, const LLResourceUploadInfo::ptr_t &uploadInfo);
 
     static void AssetInventoryUploadCoproc(LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t &httpAdapter, const LLUUID &id, std::string url, LLResourceUploadInfo::ptr_t uploadInfo);
 
+    static void AssetInventoryUploadWorkGraph(std::string url, LLResourceUploadInfo::ptr_t uploadInfo);
+
 private:
+    // A/B Testing: toggle between coroutine (false) and work graph (true) implementations
+    static bool mUseWorkGraph;
+
     static void HandleUploadError(LLCore::HttpStatus status, LLSD &result, LLResourceUploadInfo::ptr_t &uploadInfo);
 };
 

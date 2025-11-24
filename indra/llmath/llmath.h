@@ -125,12 +125,12 @@ inline bool is_approx_equal(F64 x, F64 y)
 
 // Returns true if x and y are approximately equal within a given epsilon.
 // Default epsilon is suitable for most floating point comparisons.
-inline bool is_approx_equal(F32 x, F32 y, F32 epsilon = F_APPROXIMATELY_ZERO)
+inline bool is_approx_equal(F32 x, F32 y, F32 epsilon)
 {
     return std::fabs(x - y) <= epsilon;
 }
 
-inline bool is_approx_equal(F64 x, F64 y, F64 epsilon = static_cast<F64>(F_APPROXIMATELY_ZERO))
+inline bool is_approx_equal(F64 x, F64 y, F64 epsilon)
 {
     return std::fabs(x - y) <= epsilon;
 }

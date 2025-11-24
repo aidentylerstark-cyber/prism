@@ -396,31 +396,39 @@ void LLJointSolverRP3::solve()
     LLQuaternion aRot = cgRot * pRot * twistRot;
 
     //-------------------------------------------------------------------------
-    // Clamp aRot according to mMinAngleARadians and mMaxAngleARadians
+    // Clamp aRot according to mMinAngleARadians and mMaxAngleARadians, relative to mJointABaseRotation
     //-------------------------------------------------------------------------
-    // Extract angle and axis from aRot
-    F32 aRotAngle;
-    LLVector3 aRotAxis;
-    aRot.getAngleAxis(&aRotAngle, aRotAxis);
+    // Compute the relative rotation from the base
+    
+    LLQuaternion relRot = mJointABaseRotation;
 
-    // Clamp angle to [-PI, PI] for correct comparison
-    while (aRotAngle > F_PI) aRotAngle -= F_TWO_PI;
-    while (aRotAngle < -F_PI) aRotAngle += F_TWO_PI;
+    relRot = relRot.conjugate() * (mJointA->getWorldRotation() * aRot);
+
+    // Extract angle and axis from the relative rotation
+    F32 relAngle;
+    LLVector3 relAxis;
+    relRot.getAngleAxis(&relAngle, relAxis);
+
+    // Normalize angle to [-PI, PI]
+    relAngle = llsimple_angle(relAngle);
 
     // Clamp the angle
-    F32 clampedAngle = llclamp(aRotAngle, mMinAngleARadians, mMaxAngleARadians);
+    F32 clampedAngle = llclamp(relAngle, mMinAngleARadians, mMaxAngleARadians);
 
-    // If clamping occurred, reconstruct aRot
-    if (!is_approx_equal(aRotAngle, clampedAngle, F_EPSILON))
+    // If clamping occurred, reconstruct the relative rotation
+    if (!is_approx_equal(relAngle, clampedAngle, F_EPSILON))
     {
-        aRot.setQuat(clampedAngle, aRotAxis);
+        relRot.setQuat(clampedAngle, relAxis);
     }
+
+    // Compose the final rotation: base * clamped relative
+    LLQuaternion finalARot = mJointABaseRotation * relRot;
 
     //-------------------------------------------------------------------------
     // apply the rotations
     //-------------------------------------------------------------------------
-    mJointB->setWorldRotation( mJointB->getWorldRotation() * bRot );
-    mJointA->setWorldRotation( mJointA->getWorldRotation() * aRot );
+    mJointB->setWorldRotation(mJointB->getWorldRotation() * bRot);
+    mJointA->setWorldRotation(finalARot);
 }
 
 

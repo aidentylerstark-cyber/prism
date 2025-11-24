@@ -108,6 +108,9 @@ protected:
     LLQuaternion    mJointABaseRotation;
     LLQuaternion    mJointBBaseRotation;
 
+    F32         mMinAngleARadians;
+    F32         mMaxAngleARadians;
+
 public:
     //-------------------------------------------------------------------------
     // Constructor/Destructor
@@ -162,6 +165,12 @@ public:
     // The default is 0.0.
     //-------------------------------------------------------------------------
     void setTwist( F32 twist );
+
+    //-------------------------------------------------------------------------
+    // setABAngleLimits()
+    // Sets the min and max angle limits (in degrees) for jointA.
+    // Use values of -180 to 180 to disable limits.
+    void setAAngleLimits(F32 minAngleDegrees, F32 maxAngleDegrees);
 
     //-------------------------------------------------------------------------
     // solve()

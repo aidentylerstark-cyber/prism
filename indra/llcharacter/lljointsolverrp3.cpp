@@ -56,6 +56,8 @@ LLJointSolverRP3::LLJointSolverRP3()
     mbUseBAxis = false;
     mTwist = 0.0f;
     mFirstTime = true;
+
+    setAAngleLimits(-180, 180);
 }
 
 
@@ -132,6 +134,15 @@ F32 LLJointSolverRP3::getTwist()
 void LLJointSolverRP3::setTwist( F32 twist )
 {
     mTwist = twist;
+}
+
+//-----------------------------------------------------------------------------
+// setABAngleLimits()
+//-----------------------------------------------------------------------------
+void LLJointSolverRP3::setAAngleLimits(F32 minAngleDegrees, F32 maxAngleDegrees)
+{
+    mMinAngleARadians = minAngleDegrees * DEG_TO_RAD;
+    mMaxAngleARadians = maxAngleDegrees * DEG_TO_RAD;
 }
 
 
@@ -383,6 +394,27 @@ void LLJointSolverRP3::solve()
     // compute rotation of A
     //-------------------------------------------------------------------------
     LLQuaternion aRot = cgRot * pRot * twistRot;
+
+    //-------------------------------------------------------------------------
+    // Clamp aRot according to mMinAngleARadians and mMaxAngleARadians
+    //-------------------------------------------------------------------------
+    // Extract angle and axis from aRot
+    F32 aRotAngle;
+    LLVector3 aRotAxis;
+    aRot.getAngleAxis(&aRotAngle, aRotAxis);
+
+    // Clamp angle to [-PI, PI] for correct comparison
+    while (aRotAngle > F_PI) aRotAngle -= F_TWO_PI;
+    while (aRotAngle < -F_PI) aRotAngle += F_TWO_PI;
+
+    // Clamp the angle
+    F32 clampedAngle = llclamp(aRotAngle, mMinAngleARadians, mMaxAngleARadians);
+
+    // If clamping occurred, reconstruct aRot
+    if (!is_approx_equal(aRotAngle, clampedAngle, F_EPSILON))
+    {
+        aRot.setQuat(clampedAngle, aRotAxis);
+    }
 
     //-------------------------------------------------------------------------
     // apply the rotations

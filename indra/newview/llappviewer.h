@@ -61,6 +61,7 @@ class LLImageDecodeThread;
 class LLTextureFetch;
 class LLWatchdogTimeout;
 class LLViewerJoystick;
+class LLViewerNetworkThread;
 class LLPurgeDiskCacheThread;
 class LLViewerRegion;
 
@@ -85,6 +86,7 @@ typedef enum
 class LLAppViewer : public LLApp
 {
 public:
+    friend class LLViewerNetworkThread;
     LLAppViewer();
     virtual ~LLAppViewer();
 
@@ -319,6 +321,10 @@ private:
     void idleNameCache();
     void idleNetwork();
 
+    // Thread Only Access! See LLViewerNetworkThread
+    // Returns true if all work is done
+    bool processNetwork();
+
     void sendLogoutRequest();
     void disconnectViewer();
 
@@ -367,7 +373,8 @@ private:
     LLWatchdogTimeout* mMainloopTimeout;
 
     // For performance and metric gathering
-    class LLThread* mFastTimerLogThread;
+    class LLThread* mFastTimerLogThread = nullptr;
+    class LLViewerNetworkThread* mNetworkThread = nullptr;
 
     // for tracking viewer<->region circuit death
     bool mAgentRegionLastAlive;

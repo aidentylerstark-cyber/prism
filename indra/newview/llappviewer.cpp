@@ -590,6 +590,50 @@ static void settings_modify()
     gDebugPipeline = gSavedSettings.getBOOL("RenderDebugPipeline");
 }
 
+class LLViewerNetworkThread : public LLThread
+{
+public:
+    LLViewerNetworkThread() :
+        LLThread("NETWORK"),
+        mStopping(false)
+    {
+        mNetworkTimeout = new LLWatchdogTimeout();
+    }
+
+    ~LLViewerNetworkThread()
+    {
+        delete mNetworkTimeout;
+    }
+
+    void stop()
+    {
+        mStopping = true;
+    }
+
+    void run() override
+    {
+        mNetworkTimeout->setTimeout(60.f);
+        mNetworkTimeout->start();
+        mNetworkTimeout->ping("idling");
+        while (!mStopping && !gDisconnected)
+        {
+            if (mStopping || gDisconnected) break;
+            mNetworkTimeout->ping("working");
+
+            LLAppViewer::instance()->processNetwork();
+            mNetworkTimeout->ping("idling");
+
+            ms_sleep(10);
+        }
+        mNetworkTimeout->stop();
+    }
+
+private:
+    bool mStopping;
+    std::mutex mMutex;
+    LLWatchdogTimeout* mNetworkTimeout = nullptr;
+};
+
 class LLFastTimerLogThread : public LLThread
 {
 public:
@@ -1699,6 +1743,13 @@ void LLAppViewer::flushLFSIO()
 
 bool LLAppViewer::cleanup()
 {
+    if (mNetworkThread)
+    {
+        mNetworkThread->stop();
+        delete mNetworkThread;
+        mNetworkThread = nullptr;
+    }
+
     //ditch LLVOAvatarSelf instance
     gAgentAvatarp = NULL;
 
@@ -5499,8 +5550,36 @@ static LLTrace::BlockTimerStatHandle FTM_CHECK_REGION_CIRCUIT("Check Region Circ
 
 void LLAppViewer::idleNetwork()
 {
-    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     pingMainloopTimeout("idleNetwork");
+    if (!mNetworkThread)
+    {
+        mNetworkThread = new LLViewerNetworkThread();
+        mNetworkThread->start();
+    }
+
+    gViewerThrottle.updateDynamicThrottle();
+
+    // Check that the circuit between the viewer and the agent's current
+    // region is still alive
+    LLViewerRegion* agent_region = gAgent.getRegion();
+    if (agent_region && (LLStartUp::getStartupState() == STATE_STARTED))
+    {
+        LLUUID this_region_id = agent_region->getRegionID();
+        bool this_region_alive = agent_region->isAlive();
+        if ((mAgentRegionLastAlive && !this_region_alive) // newly dead
+            && (mAgentRegionLastID == this_region_id)) // same region
+        {
+            forceDisconnect(LLTrans::getString("AgentLostConnection"));
+        }
+        mAgentRegionLastID = this_region_id;
+        mAgentRegionLastAlive = this_region_alive;
+    }
+}
+
+// Thread Only Access! See LLViewerNetworkThread
+bool LLAppViewer::processNetwork()
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
 
     gObjectList.mNumNewObjects = 0;
     S32 total_decoded = 0;
@@ -5579,23 +5658,7 @@ void LLAppViewer::idleNetwork()
     }
     gAssetStorage->checkForTimeouts();
     gViewerThrottle.setBufferLoadRate(gMessageSystem->getBufferLoadRate());
-    gViewerThrottle.updateDynamicThrottle();
-
-    // Check that the circuit between the viewer and the agent's current
-    // region is still alive
-    LLViewerRegion *agent_region = gAgent.getRegion();
-    if (agent_region && (LLStartUp::getStartupState()==STATE_STARTED))
-    {
-        LLUUID this_region_id = agent_region->getRegionID();
-        bool this_region_alive = agent_region->isAlive();
-        if ((mAgentRegionLastAlive && !this_region_alive) // newly dead
-            && (mAgentRegionLastID == this_region_id)) // same region
-        {
-            forceDisconnect(LLTrans::getString("AgentLostConnection"));
-        }
-        mAgentRegionLastID = this_region_id;
-        mAgentRegionLastAlive = this_region_alive;
-    }
+    return true;
 }
 
 void LLAppViewer::disconnectViewer()

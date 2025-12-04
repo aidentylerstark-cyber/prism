@@ -39,7 +39,7 @@
       width="285">
     </panel>
     <text
-      follows="all"
+      follows="left|right|top"
       font="SansSerifBold"
       height="55"
       layout="topleft"

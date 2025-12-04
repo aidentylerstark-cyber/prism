@@ -78,21 +78,37 @@ void LLToastScriptQuestion::snapToMessageHeight()
 
     if (mMessage->getVisible() && mFooter->getVisible())
     {
-        S32 heightDelta = 0;
-        S32 maxTextHeight = (mMessage->getFont()->getLineHeight() * MAX_LINES_COUNT)
+        S32 height_delta = 0;
+        S32 max_text_height = (mMessage->getFont()->getLineHeight() * MAX_LINES_COUNT)
                           + (mFooter->getFont()->getLineHeight() * MAX_LINES_COUNT);
 
-        LLRect messageRect = mMessage->getRect();
-        LLRect footerRect  = mFooter->getRect();
+        LLRect message_rect = mMessage->getRect();
 
-        S32 oldTextHeight = messageRect.getHeight() + footerRect.getHeight();
+        S32 old_message_height = message_rect.getHeight();
+        S32 new_message_height = mMessage->getTextBoundingRect().getHeight();
+        S32 new_footer_height = mFooter->getTextBoundingRect().getHeight();
 
-        S32 requiredTextHeight = mMessage->getTextBoundingRect().getHeight() + mFooter->getTextBoundingRect().getHeight();
-        S32 newTextHeight = llmin(requiredTextHeight, maxTextHeight);
+        S32 required_text_height = new_message_height + new_footer_height;
+        S32 new_text_height = llmin(required_text_height, max_text_height);
 
-        heightDelta = newTextHeight - oldTextHeight - heightDelta;
+        // Footer was invisibe, so use old_message_height for old height
+        height_delta = new_text_height - old_message_height;
 
-        reshape( getRect().getWidth(), llmax(getRect().getHeight() + heightDelta, MIN_PANEL_HEIGHT));
+        reshape( getRect().getWidth(), llmax(getRect().getHeight() + height_delta, MIN_PANEL_HEIGHT));
+        
+        // Floater was resized, now resize and shift children
+        // Message follows top, so it's top is in a correct position, but needs to be resized down
+        S32 message_delta = new_message_height - old_message_height;
+        message_rect = mMessage->getRect(); // refresh since it might have changed after reshape
+        message_rect.mBottom = message_rect.mBottom - message_delta;
+        mMessage->setRect(message_rect);
+        // button panel should stay the same size, just translate it
+        LLPanel* panel = getChild<LLPanel>("buttons_panel");
+        panel->translate(0, -message_delta);
+        // footer should be both moved down and resized
+        LLRect footer_rect  = mFooter->getRect();
+        footer_rect.mTop = footer_rect.mTop - message_delta;
+        footer_rect.mBottom = footer_rect.mTop - new_footer_height;
     }
 }
 

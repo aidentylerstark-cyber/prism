@@ -68,6 +68,7 @@ set(llmessage_SOURCE_FILES
     lltransfertargetvfile.cpp
     lltrustedmessageservice.cpp
     lluseroperation.cpp
+    llviewernetworkthread.cpp
     llxfer.cpp
     llxfer_file.cpp
     llxfermanager.cpp
@@ -160,6 +161,7 @@ set(llmessage_HEADER_FILES
     lltrustedmessageservice.h
     lluseroperation.h
     llvehicleparams.h
+    llviewernetworkthread.h
     llxfer.h
     llxfermanager.h
     llxfer_file.h

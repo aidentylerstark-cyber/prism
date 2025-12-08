@@ -78,6 +78,7 @@
 #include "llviewershadermgr.h"
 #include "llviewermediafocus.h"
 #include "llviewermessage.h"
+#include "llviewernetworkthread.h"
 #include "llviewerobjectlist.h"
 #include "llworldmap.h"
 #include "llmutelist.h"
@@ -589,50 +590,6 @@ static void settings_modify()
     gDebugGL       = gDebugGLSession || gDebugSession;
     gDebugPipeline = gSavedSettings.getBOOL("RenderDebugPipeline");
 }
-
-class LLViewerNetworkThread : public LLThread
-{
-public:
-    LLViewerNetworkThread() :
-        LLThread("NETWORK"),
-        mStopping(false)
-    {
-        mNetworkTimeout = new LLWatchdogTimeout();
-    }
-
-    ~LLViewerNetworkThread()
-    {
-        delete mNetworkTimeout;
-    }
-
-    void stop()
-    {
-        mStopping = true;
-    }
-
-    void run() override
-    {
-        mNetworkTimeout->setTimeout(60.f);
-        mNetworkTimeout->start();
-        mNetworkTimeout->ping("idling");
-        while (!mStopping && !gDisconnected)
-        {
-            if (mStopping || gDisconnected) break;
-            mNetworkTimeout->ping("working");
-
-            LLAppViewer::instance()->processNetwork();
-            mNetworkTimeout->ping("idling");
-
-            ms_sleep(10);
-        }
-        mNetworkTimeout->stop();
-    }
-
-private:
-    bool mStopping;
-    std::mutex mMutex;
-    LLWatchdogTimeout* mNetworkTimeout = nullptr;
-};
 
 class LLFastTimerLogThread : public LLThread
 {
@@ -1743,13 +1700,6 @@ void LLAppViewer::flushLFSIO()
 
 bool LLAppViewer::cleanup()
 {
-    if (mNetworkThread)
-    {
-        mNetworkThread->stop();
-        delete mNetworkThread;
-        mNetworkThread = nullptr;
-    }
-
     //ditch LLVOAvatarSelf instance
     gAgentAvatarp = NULL;
 
@@ -1798,6 +1748,7 @@ bool LLAppViewer::cleanup()
 
     disconnectViewer();
     LLViewerCamera::deleteSingleton();
+    LLViewerNetworkThread::deleteSingleton();
 
     LL_INFOS() << "Viewer disconnected" << LL_ENDL;
 
@@ -2457,6 +2408,7 @@ bool LLAppViewer::loadSettingsFromDirectory(const std::string& location_key,
     if (!mSettingsLocationList)
     {
         LL_ERRS() << "Invalid settings location list" << LL_ENDL;
+        return false;
     }
 
     for (const SettingsGroup& group : mSettingsLocationList->groups)
@@ -5554,6 +5506,7 @@ void LLAppViewer::idleNetwork()
     if (!mNetworkThread)
     {
         mNetworkThread = new LLViewerNetworkThread();
+        LLViewerNetworkThread::createInstance();
         mNetworkThread->start();
     }
 

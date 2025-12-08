@@ -1593,9 +1593,7 @@ void LLFloaterWorldMap::teleport()
                && !landmark->getGlobalPos(pos_global)
                && landmark->getRegionID(region_id))
             {
-                LLLandmark::requestRegionHandle(
-                                                gMessageSystem,
-                                                gAgent.getRegionHost(),
+                LLLandmark::requestRegionHandle(gAgent.getRegionHost(),
                                                 region_id,
                                                 NULL);
             }
@@ -1670,9 +1668,7 @@ void LLFloaterWorldMap::teleportToLandmark()
             LLUUID region_id;
             if(landmark->getRegionID(region_id))
             {
-                LLLandmark::requestRegionHandle(
-                                                gMessageSystem,
-                                                gAgent.getRegionHost(),
+                LLLandmark::requestRegionHandle(gAgent.getRegionHost(),
                                                 region_id,
                                                 NULL);
             }

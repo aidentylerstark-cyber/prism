@@ -50,8 +50,11 @@ void clear_signals();
 
 #endif
 
+class LLViewerNetworkThread;
+
 class LL_COMMON_API LLApp
 {
+    friend class LLViewerNetworkThread;
 public:
     typedef enum e_app_status
     {
@@ -290,6 +293,11 @@ public:
     string_map mOptionMap;  // Contains all command-line options and arguments in a map
 
 protected:
+    //
+    // processNetwork()
+    //
+    // Process network events. Returns 'done' flag
+    virtual bool processNetwork() = 0;
 
     static void setStatus(EAppStatus status);       // Use this to change the application status.
     static LLScalarCond<EAppStatus> sStatus; // Reflects current application status

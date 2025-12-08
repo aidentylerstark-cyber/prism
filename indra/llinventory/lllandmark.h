@@ -70,7 +70,6 @@ public:
     // callback is made. This function may call into the message
     // system to get the information.
     static void requestRegionHandle(
-        LLMessageSystem* msg,
         const LLHost& upstream_host,
         const LLUUID& region_id,
         region_handle_callback_t callback);

@@ -79,7 +79,7 @@ public:
     // Called from run() (CHILD THREAD). Pause the thread if requested until unpaused.
     void checkPause();
 
-    // this kicks off the apr thread
+    // this kicks off the thread
     void start(void);
 
     LLVolatileAPRPool* getLocalAPRFilePool() { return mLocalAPRFilePoolp ; }

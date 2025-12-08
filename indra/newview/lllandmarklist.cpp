@@ -131,7 +131,6 @@ void LLLandmarkList::processGetAssetReply(
                     if (landmark->getRegionID(region_id))
                     {
                         LLLandmark::requestRegionHandle(
-                            gMessageSystem,
                             gAgent.getRegionHost(),
                             region_id,
                             boost::bind(&LLLandmarkList::onRegionHandle, &gLandmarkList, uuid));

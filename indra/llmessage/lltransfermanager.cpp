@@ -37,6 +37,7 @@
 #include "lltransfersourceasset.h"
 #include "lltransfertargetfile.h"
 #include "lltransfertargetvfile.h"
+#include "llviewernetworkthread.h"
 
 const S32 MAX_PACKET_DATA_SIZE = 2048;
 const S32 MAX_PARAMS_SIZE = 1024;
@@ -809,32 +810,25 @@ void LLTransferSourceChannel::updateTransfers()
             continue;
         }
 
-        LLUUID *cb_uuid = new LLUUID(tsp->getID());
         LLUUID transaction_id = tsp->getID();
-
-        // Send the data now, even if it's an error.
-        // The status code will tell the other end what to do.
-        gMessageSystem->newMessage("TransferPacket");
-        gMessageSystem->nextBlock("TransferData");
-        gMessageSystem->addUUID("TransferID", tsp->getID());
-        gMessageSystem->addS32("ChannelType", getChannelType());
-        gMessageSystem->addS32("Packet", packet_id);    // HACK!  Need to put in a REAL packet id
-        gMessageSystem->addS32("Status", status);
-        gMessageSystem->addBinaryData("Data", datap, data_size);
-        sent_bytes = gMessageSystem->getCurrentSendTotal();
-        gMessageSystem->sendReliable(getHost(), LL_DEFAULT_RELIABLE_RETRIES, true, F32Seconds(0.f),
-                                     LLTransferManager::reliablePacketCallback, (void**)cb_uuid);
-
-        // Do bookkeeping for the throttle
-        done = tg.throttleOverflow(throttle_id, sent_bytes*8.f);
-        gTransferManager.addTransferBitsOut(mChannelType, sent_bytes*8);
-
-        // Clean up our temporary data.
-        if (delete_data)
+        LLTransferChannelType channel_type = getChannelType();
+        LLHost host = getHost();
+        LLViewerNetworkThread::postWork([transaction_id, channel_type, host, packet_id, status, datap, data_size]()
         {
-            delete[] datap;
-            datap = NULL;
-        }
+            LLUUID* cb_uuid = new LLUUID(transaction_id);
+            // Send the data now, even if it's an error.
+            // The status code will tell the other end what to do.
+            gMessageSystem->newMessage("TransferPacket");
+            gMessageSystem->nextBlock("TransferData");
+            gMessageSystem->addUUID("TransferID", transaction_id);
+            gMessageSystem->addS32("ChannelType", channel_type);
+            gMessageSystem->addS32("Packet", packet_id);    // HACK!  Need to put in a REAL packet id
+            gMessageSystem->addS32("Status", status);
+            gMessageSystem->addBinaryData("Data", datap, data_size);
+            sent_bytes = gMessageSystem->getCurrentSendTotal();
+            gMessageSystem->sendReliable(host, LL_DEFAULT_RELIABLE_RETRIES, true, F32Seconds(0.f),
+                LLTransferManager::reliablePacketCallback, (void**)cb_uuid);
+        });
 
         if (findTransferSource(transaction_id) == NULL)
         {
@@ -979,21 +973,30 @@ void LLTransferTargetChannel::sendTransferRequest(LLTransferTarget *targetp,
     //
     llassert(targetp);
     llassert(targetp->getChannel() == this);
-
-    gMessageSystem->newMessage("TransferRequest");
-    gMessageSystem->nextBlock("TransferInfo");
-    gMessageSystem->addUUID("TransferID", targetp->getID());
-    gMessageSystem->addS32("SourceType", params.getType());
-    gMessageSystem->addS32("ChannelType", getChannelType());
-    gMessageSystem->addF32("Priority", priority);
+    const LLUUID transfer_id = targetp->getID();
+    const LLTransferSourceType tr_type = params.getType();
 
     U8 tmp[MAX_PARAMS_SIZE];
     LLDataPackerBinaryBuffer dp(tmp, MAX_PARAMS_SIZE);
     params.packParams(dp);
-    S32 len = dp.getCurrentSize();
-    gMessageSystem->addBinaryData("Params", tmp, len);
 
-    gMessageSystem->sendReliable(mHost);
+    const LLHost host = mHost;
+    const LLTransferChannelType channel_type = getChannelType();
+
+    LLViewerNetworkThread::postWork([transfer_id, tr_type, tmp, dp, host, channel_type, priority]()
+    {
+        gMessageSystem->newMessage("TransferRequest");
+        gMessageSystem->nextBlock("TransferInfo");
+        gMessageSystem->addUUID("TransferID", transfer_id);
+        gMessageSystem->addS32("SourceType", tr_type);
+        gMessageSystem->addS32("ChannelType", channel_type);
+        gMessageSystem->addF32("Priority", priority);
+
+        S32 len = dp.getCurrentSize();
+        gMessageSystem->addBinaryData("Params", tmp, len);
+
+        gMessageSystem->sendReliable(host);
+    });
 }
 
 
@@ -1070,19 +1073,26 @@ LLTransferSource::~LLTransferSource()
 
 void LLTransferSource::sendTransferStatus(LLTSCode status)
 {
-    gMessageSystem->newMessage("TransferInfo");
-    gMessageSystem->nextBlock("TransferInfo");
-    gMessageSystem->addUUID("TransferID", getID());
-    gMessageSystem->addS32("TargetType", LLTTT_UNKNOWN);
-    gMessageSystem->addS32("ChannelType", mChannelp->getChannelType());
-    gMessageSystem->addS32("Status", status);
-    gMessageSystem->addS32("Size", mSize);
     U8 tmp[MAX_PARAMS_SIZE];
     LLDataPackerBinaryBuffer dp(tmp, MAX_PARAMS_SIZE);
     packParams(dp);
-    S32 len = dp.getCurrentSize();
-    gMessageSystem->addBinaryData("Params", tmp, len);
-    gMessageSystem->sendReliable(mChannelp->getHost());
+    LLUUID transfer_id = getID();
+    LLTransferChannelType channel_type = mChannelp->getChannelType();
+    S32 size = mSize;
+    LLHost host = mChannelp->getHost();
+    LLViewerNetworkThread::postWork([status, tmp, dp, transfer_id, channel_type, size, host]()
+    {
+        gMessageSystem->newMessage("TransferInfo");
+        gMessageSystem->nextBlock("TransferInfo");
+        gMessageSystem->addUUID("TransferID", transfer_id);
+        gMessageSystem->addS32("TargetType", LLTTT_UNKNOWN);
+        gMessageSystem->addS32("ChannelType", channel_type);
+        gMessageSystem->addS32("Status", status);
+        gMessageSystem->addS32("Size", size);
+        S32 len = dp.getCurrentSize();
+        gMessageSystem->addBinaryData("Params", tmp, len);
+        gMessageSystem->sendReliable(host);
+    });
 
     // Abort if there was as asset system issue.
     if (status != LLTS_OK)
@@ -1099,12 +1109,18 @@ void LLTransferSource::sendTransferStatus(LLTSCode status)
 void LLTransferSource::abortTransfer()
 {
     // Send a message down, call the completion callback
-    LL_INFOS() << "LLTransferSource::Aborting transfer " << getID() << " to " << mChannelp->getHost() << LL_ENDL;
-    gMessageSystem->newMessage("TransferAbort");
-    gMessageSystem->nextBlock("TransferInfo");
-    gMessageSystem->addUUID("TransferID", getID());
-    gMessageSystem->addS32("ChannelType", mChannelp->getChannelType());
-    gMessageSystem->sendReliable(mChannelp->getHost());
+    LLUUID transfer_id = getID();
+    LL_INFOS() << "LLTransferSource::Aborting transfer " << transfer_id << " to " << mChannelp->getHost() << LL_ENDL;
+    LLTransferChannelType channel_type = mChannelp->getChannelType();
+    LLHost host = mChannelp->getHost();
+    LLViewerNetworkThread::postWork([transfer_id, channel_type, host]()
+    {
+        gMessageSystem->newMessage("TransferAbort");
+        gMessageSystem->nextBlock("TransferInfo");
+        gMessageSystem->addUUID("TransferID", transfer_id);
+        gMessageSystem->addS32("ChannelType", channel_type);
+        gMessageSystem->sendReliable(host);
+    });
 
     completionCallback(LLTS_ABORT);
 }
@@ -1232,12 +1248,18 @@ LLTransferTarget::~LLTransferTarget()
 void LLTransferTarget::abortTransfer()
 {
     // Send a message up, call the completion callback
-    LL_INFOS() << "LLTransferTarget::Aborting transfer " << getID() << " from " << mChannelp->getHost() << LL_ENDL;
-    gMessageSystem->newMessage("TransferAbort");
-    gMessageSystem->nextBlock("TransferInfo");
-    gMessageSystem->addUUID("TransferID", getID());
-    gMessageSystem->addS32("ChannelType", mChannelp->getChannelType());
-    gMessageSystem->sendReliable(mChannelp->getHost());
+    LLUUID transfer_id = getID();
+    LL_INFOS() << "LLTransferTarget::Aborting transfer " << transfer_id << " from " << mChannelp->getHost() << LL_ENDL;    LLTransferChannelType channel_type = mChannelp->getChannelType();
+    LLTransferChannelType channel_type = mChannelp->getChannelType();
+    LLHost host = mChannelp->getHost();
+    LLViewerNetworkThread::postWork([transfer_id, channel_type, host]()
+    {
+        gMessageSystem->newMessage("TransferAbort");
+        gMessageSystem->nextBlock("TransferInfo");
+        gMessageSystem->addUUID("TransferID", transfer_id);
+        gMessageSystem->addS32("ChannelType", channel_type);
+        gMessageSystem->sendReliable(host);
+    });
 
     completionCallback(LLTS_ABORT);
 }

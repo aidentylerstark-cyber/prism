@@ -36,6 +36,7 @@
 #include "llsdserialize.h"
 #include "lluuid.h"
 #include "message.h"
+#include "workqueue.h"
 
 #include <boost/regex.hpp>
 
@@ -232,6 +233,8 @@ public:
     static void handleUUIDNameReply(LLMessageSystem* msg, void** userdata);
     static void handleUUIDGroupNameRequest(LLMessageSystem* msg, void** userdata);
     static void handleUUIDGroupNameReply(LLMessageSystem* msg, void** userdata);
+
+    std::mutex mMessageMutex;
 };
 
 
@@ -888,6 +891,7 @@ void LLCacheName::Impl::processUUIDRequest(LLMessageSystem* msg, bool isGroup)
         LL_WARNS() << "LLCacheName - got UUID name/group request, but no upstream provider!" << LL_ENDL;
         return;
     }
+    std::unique_lock lock(mMessageMutex);
 
     LLHost fromHost = msg->getSender();
     ReplySender sender(msg);
@@ -937,6 +941,7 @@ void LLCacheName::Impl::processUUIDRequest(LLMessageSystem* msg, bool isGroup)
 
 void LLCacheName::Impl::processUUIDReply(LLMessageSystem* msg, bool isGroup)
 {
+    std::unique_lock lock(mMessageMutex);
     S32 count = msg->getNumberOfBlocksFast(_PREHASH_UUIDNameBlock);
     for(S32 i = 0; i < count; ++i)
     {
@@ -985,13 +990,19 @@ void LLCacheName::Impl::processUUIDReply(LLMessageSystem* msg, bool isGroup)
             {
                 full_name = LLCacheName::buildFullName(entry->mFirstName, entry->mLastName);
             }
-            mSignal(id, full_name, false);
+
+            // processing happens in a thread, so we need to post back to main loop
+
+            LL::WorkQueue::weak_t main_queue = LL::WorkQueue::getInstance("mainloop");
+            LL::WorkQueue::postMaybe(main_queue, [this, id, full_name] { mSignal(id, full_name, false); });
             mReverseCache[full_name] = id;
         }
         else
         {
-            mSignal(id, entry->mGroupName, true);
-            mReverseCache[entry->mGroupName] = id;
+            std::string name = entry->mGroupName;
+            LL::WorkQueue::weak_t main_queue = LL::WorkQueue::getInstance("mainloop");
+            LL::WorkQueue::postMaybe(main_queue, [this, id, name] { mSignal(id, name, true); });
+            mReverseCache[name] = id;
         }
     }
 }

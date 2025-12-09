@@ -1114,6 +1114,7 @@ S32 LLMessageSystem::sendMessage(const LLHost &host)
         return 0;
     }
 
+    // todo: make mCircuitInfo thread safe
     LLCircuitData *cdp = mCircuitInfo.findCircuit(host);
     if (!cdp)
     {

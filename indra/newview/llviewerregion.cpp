@@ -3006,10 +3006,8 @@ void LLViewerRegion::clearVOCacheFromMemory()
     mImpl->mCacheMap.clear();
 }
 
-void LLViewerRegion::unpackRegionHandshake()
+void LLViewerRegion::unpackRegionHandshake(LLMessageSystem* msg)
 {
-    LLMessageSystem *msg = gMessageSystem;
-
     U64 region_flags = 0;
     U64 region_protocols = 0;
     U8 sim_access;
@@ -3176,35 +3174,39 @@ void LLViewerRegion::unpackRegionHandshake()
     }
 
 
-    // Now that we have the name, we can load the cache file
-    // off disk.
-    loadObjectCache();
+    LL::WorkQueue::weak_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::postMaybe(main_queue, [this] {
 
-    // After loading cache, signal that simulator can start
-    // sending data.
-    // TODO: Send all upstream viewer->sim handshake info here.
-    LLHost host = msg->getSender();
-    msg->newMessage("RegionHandshakeReply");
-    msg->nextBlock("AgentData");
-    msg->addUUID("AgentID", gAgent.getID());
-    msg->addUUID("SessionID", gAgent.getSessionID());
-    msg->nextBlock("RegionInfo");
+        // Now that we have the name, we can load the cache file
+        // off disk.
+        loadObjectCache();
 
-    U32 flags = 0;
-    flags |= REGION_HANDSHAKE_SUPPORTS_SELF_APPEARANCE;
+        // After loading cache, signal that simulator can start
+        // sending data.
+        // TODO: Send all upstream viewer->sim handshake info here.
+        LLHost host = gMessageSystem->getSender();
+        gMessageSystem->newMessage("RegionHandshakeReply");
+        gMessageSystem->nextBlock("AgentData");
+        gMessageSystem->addUUID("AgentID", gAgent.getID());
+        gMessageSystem->addUUID("SessionID", gAgent.getSessionID());
+        gMessageSystem->nextBlock("RegionInfo");
 
-    if(sVOCacheCullingEnabled)
-    {
-        flags |= 0x00000001; //set the bit 0 to be 1 to ask sim to send all cacheable objects.
-    }
-    if(mImpl->mCacheMap.empty())
-    {
-        flags |= 0x00000002; //set the bit 1 to be 1 to tell sim the cache file is empty, no need to send cache probes.
-    }
-    msg->addU32("Flags", flags );
-    msg->sendReliable(host);
+        U32 flags = 0;
+        flags |= REGION_HANDSHAKE_SUPPORTS_SELF_APPEARANCE;
 
-    mRegionTimer.reset(); //reset region timer.
+        if (sVOCacheCullingEnabled)
+        {
+            flags |= 0x00000001; //set the bit 0 to be 1 to ask sim to send all cacheable objects.
+        }
+        if (mImpl->mCacheMap.empty())
+        {
+            flags |= 0x00000002; //set the bit 1 to be 1 to tell sim the cache file is empty, no need to send cache probes.
+        }
+        gMessageSystem->addU32("Flags", flags);
+        gMessageSystem->sendReliable(host);
+
+        mRegionTimer.reset(); //reset region timer.
+    });
 }
 
 // static

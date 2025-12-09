@@ -5503,12 +5503,6 @@ static LLTrace::BlockTimerStatHandle FTM_CHECK_REGION_CIRCUIT("Check Region Circ
 void LLAppViewer::idleNetwork()
 {
     pingMainloopTimeout("idleNetwork");
-    if (!mNetworkThread)
-    {
-        mNetworkThread = new LLViewerNetworkThread();
-        LLViewerNetworkThread::createInstance();
-        mNetworkThread->start();
-    }
 
     gViewerThrottle.updateDynamicThrottle();
 

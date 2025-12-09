@@ -249,11 +249,14 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
         return;
     }
 
-    updateActive(objectp);
-
-    if (just_created)
     {
-        gPipeline.addObject(objectp);
+        std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
+        updateActive(objectp);
+
+        if (just_created)
+        {
+            gPipeline.addObject(objectp);
+        }
     }
 
     // Also sets the approx. pixel area
@@ -328,6 +331,7 @@ LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry*
         if(!objectp->isDead() && (objectp->mLocalID != entry->getLocalID() ||
             objectp->getRegion() != regionp))
         {
+            std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
             removeFromLocalIDTable(objectp);
             setUUIDAndLocal(fullid, entry->getLocalID(),
                             regionp->getHost().getAddress(),
@@ -575,6 +579,7 @@ void LLViewerObjectList::processObjectUpdate(LLMessageSystem *mesgsys,
             //          << ", regionp " << (U32) regionp << ", object region " << (U32) objectp->getRegion()
             //          << LL_ENDL;
             //}
+            std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
             removeFromLocalIDTable(objectp);
             setUUIDAndLocal(fullid,
                             local_id,
@@ -741,6 +746,7 @@ void LLViewerObjectList::processCachedObjectUpdate(LLMessageSystem *mesgsys,
 
 void LLViewerObjectList::dirtyAllObjectInventory()
 {
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         (*iter)->dirtyInventory();
@@ -1271,6 +1277,7 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url)
 
 void LLViewerObjectList::clearDebugText()
 {
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         (*iter)->restoreHudText();
@@ -1298,27 +1305,30 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
 
     LL_DEBUGS("ObjectUpdate") << " dereferencing id " << objectp->mID << LL_ENDL;
 
-    mUUIDObjectMap.erase(objectp->mID);
-
-    //if (objectp->getRegion())
-    //{
-    //  LL_INFOS() << "cleanupReferences removing object from table, local ID " << objectp->mLocalID << ", ip "
-    //              << objectp->getRegion()->getHost().getAddress() << ":"
-    //              << objectp->getRegion()->getHost().getPort() << LL_ENDL;
-    //}
-
-    removeFromLocalIDTable(objectp);
-
-    if (objectp->onActiveList())
     {
-        //LL_INFOS() << "Removing " << objectp->mID << " " << objectp->getPCodeString() << " from active list in cleanupReferences." << LL_ENDL;
-        objectp->setOnActiveList(false);
-        removeFromActiveList(objectp);
-    }
+        std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
+        mUUIDObjectMap.erase(objectp->mID);
 
-    if (objectp->isOnMap())
-    {
-        removeFromMap(objectp);
+        //if (objectp->getRegion())
+        //{
+        //  LL_INFOS() << "cleanupReferences removing object from table, local ID " << objectp->mLocalID << ", ip "
+        //              << objectp->getRegion()->getHost().getAddress() << ":"
+        //              << objectp->getRegion()->getHost().getPort() << LL_ENDL;
+        //}
+
+        removeFromLocalIDTable(objectp);
+
+        if (objectp->onActiveList())
+        {
+            //LL_INFOS() << "Removing " << objectp->mID << " " << objectp->getPCodeString() << " from active list in cleanupReferences." << LL_ENDL;
+            objectp->setOnActiveList(false);
+            removeFromActiveList(objectp);
+        }
+
+        if (objectp->isOnMap())
+        {
+            removeFromMap(objectp);
+        }
     }
 
     // Don't clean up mObject references, these will be cleaned up more efficiently later!
@@ -1361,7 +1371,7 @@ void LLViewerObjectList::killObjects(LLViewerRegion *regionp)
     LL_PROFILE_ZONE_SCOPED;
     LLViewerObject *objectp;
 
-
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         objectp = *iter;
@@ -1422,6 +1432,7 @@ void LLViewerObjectList::cleanDeadObjects(bool use_timer)
 
     vobj_list_t::reverse_iterator target = mObjects.rbegin();
 
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     vobj_list_t::iterator iter = mObjects.begin();
     for ( ; iter != mObjects.end(); )
     {
@@ -1492,6 +1503,7 @@ void LLViewerObjectList::updateActive(LLViewerObject *objectp)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWABLE;
 
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     if (objectp->isDead())
     {
         return; // We don't update dead objects!
@@ -1617,6 +1629,7 @@ void LLViewerObjectList::shiftObjects(const LLVector3 &offset)
 
 
     LLViewerObject *objectp;
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         objectp = *iter;
@@ -1639,6 +1652,7 @@ void LLViewerObjectList::shiftObjects(const LLVector3 &offset)
 
 void LLViewerObjectList::repartitionObjects()
 {
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         LLViewerObject* objectp = *iter;
@@ -1836,11 +1850,14 @@ LLViewerObject *LLViewerObjectList::createObjectViewer(const LLPCode pcode, LLVi
         return NULL;
     }
 
-    mUUIDObjectMap[fullid] = objectp;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
+        mUUIDObjectMap[fullid] = objectp;
 
-    mObjects.push_back(objectp);
+        mObjects.push_back(objectp);
 
-    updateActive(objectp);
+        updateActive(objectp);
+    }
 
     return objectp;
 }
@@ -1859,15 +1876,18 @@ LLViewerObject *LLViewerObjectList::createObjectFromCache(const LLPCode pcode, L
     }
 
     objectp->mLocalID = local_id;
-    mUUIDObjectMap[uuid] = objectp;
-    setUUIDAndLocal(uuid,
-                    local_id,
-                    regionp->getHost().getAddress(),
-                    regionp->getHost().getPort(),
-                    objectp);
-    mObjects.push_back(objectp);
+    {
+        std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
+        mUUIDObjectMap[uuid] = objectp;
+        setUUIDAndLocal(uuid,
+            local_id,
+            regionp->getHost().getAddress(),
+            regionp->getHost().getPort(),
+            objectp);
+        mObjects.push_back(objectp);
 
-    updateActive(objectp);
+        updateActive(objectp);
+    }
 
     return objectp;
 }
@@ -1898,16 +1918,19 @@ LLViewerObject *LLViewerObjectList::createObject(const LLPCode pcode, LLViewerRe
         regionp->addToCreatedList(local_id);
     }
 
-    mUUIDObjectMap[fullid] = objectp;
-    setUUIDAndLocal(fullid,
-                    local_id,
-                    gMessageSystem->getSenderIP(),
-                    gMessageSystem->getSenderPort(),
-                    objectp);
+    {
+        std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
+        mUUIDObjectMap[fullid] = objectp;
+        setUUIDAndLocal(fullid,
+            local_id,
+            gMessageSystem->getSenderIP(),
+            gMessageSystem->getSenderPort(),
+            objectp);
 
-    mObjects.push_back(objectp);
+        mObjects.push_back(objectp);
 
-    updateActive(objectp);
+        updateActive(objectp);
+    }
 
     return objectp;
 }
@@ -1925,13 +1948,14 @@ LLViewerObject *LLViewerObjectList::replaceObject(const LLUUID &id, const LLPCod
     return NULL;
 }
 
-S32 LLViewerObjectList::findReferences(LLDrawable *drawablep) const
+S32 LLViewerObjectList::findReferences(LLDrawable *drawablep)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWABLE;
 
     LLViewerObject *objectp;
     S32 num_refs = 0;
 
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     for (vobj_list_t::const_iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         objectp = *iter;

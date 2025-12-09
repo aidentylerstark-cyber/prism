@@ -386,7 +386,7 @@ public:
     void dumpCache  ();
     void clearVOCacheFromMemory();
 
-    void unpackRegionHandshake();
+    void unpackRegionHandshake(LLMessageSystem* msg);
 
     void calculateCenterGlobal();
     void calculateCameraDistance();

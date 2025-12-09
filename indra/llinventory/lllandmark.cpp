@@ -29,7 +29,7 @@
 
 #include <errno.h>
 
-#include "llviewernetworkthread.h"
+#include "message.h"
 #include "llregionhandle.h"
 
 std::pair<LLUUID, U64> LLLandmark::mLocalRegion;
@@ -249,15 +249,11 @@ void LLLandmark::requestRegionHandle(
                 }
                 LL_DEBUGS("Landmark") << "Landmark requesting information about: "
                          << region_id << LL_ENDL;
-
-                LLViewerNetworkThread::postWork([region_id, upstream_host]()
-                {
-                    LLMessageSystem* msg = gMessageSystem;
-                    msg->newMessage("RegionHandleRequest");
-                    msg->nextBlock("RequestBlock");
-                    msg->addUUID("RegionID", region_id);
-                    msg->sendReliable(upstream_host);
-                });
+                LLMessageSystem* msg = gMessageSystem;
+                msg->newMessage("RegionHandleRequest");
+                msg->nextBlock("RequestBlock");
+                msg->addUUID("RegionID", region_id);
+                msg->sendReliable(upstream_host);
             }
             else if(callback)
             {

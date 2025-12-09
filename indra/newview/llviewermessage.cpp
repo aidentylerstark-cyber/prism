@@ -3158,13 +3158,17 @@ void process_crossed_region(LLMessageSystem* msg, void**)
     std::string seedCap;
     msg->getStringFast(_PREHASH_RegionData, _PREHASH_SeedCapability, seedCap);
 
-    send_complete_agent_movement(sim_host);
+    LL::WorkQueue::weak_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::postMaybe(main_queue, [region_handle, sim_host, seedCap] {
 
-    LLViewerRegion* regionp = LLWorld::getInstance()->addRegion(region_handle, sim_host);
+        send_complete_agent_movement(sim_host);
 
-    LL_DEBUGS("CrossingCaps") << "Calling setSeedCapability from process_crossed_region(). Seed cap == "
+        LLViewerRegion* regionp = LLWorld::getInstance()->addRegion(region_handle, sim_host);
+
+        LL_DEBUGS("CrossingCaps") << "Calling setSeedCapability from process_crossed_region(). Seed cap == "
             << seedCap << LL_ENDL;
-    regionp->setSeedCapability(seedCap);
+        regionp->setSeedCapability(seedCap);
+    });
 }
 
 

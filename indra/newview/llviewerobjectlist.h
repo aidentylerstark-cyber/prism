@@ -141,7 +141,7 @@ public:
     // Only accessed by markDead in LLViewerObject
     void cleanupReferences(LLViewerObject *objectp);
 
-    S32 findReferences(LLDrawable *drawablep) const; // Find references to drawable in all objects, and return value.
+    S32 findReferences(LLDrawable *drawablep); // Find references to drawable in all objects, and return value.
 
     S32 getOrphanParentCount() const { return (S32) mOrphanParents.size(); }
     S32 getOrphanCount() const { return mNumOrphans; }
@@ -189,6 +189,7 @@ public:
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
     S32 mNumDeadObjects;
+
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects
@@ -224,6 +225,8 @@ protected:
     std::map<U64, LLUUID> mIndexAndLocalIDToUUID;
 
     friend class LLViewerObject;
+
+    std::recursive_mutex mObjectMapMutex;
 
 private:
     static void reportObjectCostFailure(LLSD &objectList);
@@ -263,6 +266,7 @@ inline LLViewerObject *LLViewerObjectList::findObject(const LLUUID &id)
     if (id.isNull())
         return NULL;
 
+    std::lock_guard<std::recursive_mutex> lock(mObjectMapMutex);
     auto iter = mUUIDObjectMap.find(id);
     if (iter != mUUIDObjectMap.end())
     {

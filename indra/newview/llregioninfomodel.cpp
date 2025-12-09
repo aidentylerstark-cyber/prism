@@ -204,8 +204,12 @@ void LLRegionInfoModel::update(LLMessageSystem* msg)
         msg->getString(_PREHASH_RegionInfo2, "ProductName", mSimType);
     }
 
-    // Let interested parties know that region info has been updated.
-    mUpdateSignal();
+    LL::WorkQueue::weak_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::postMaybe(main_queue, [this]
+    {
+        // Let interested parties know that region info has been updated.
+        mUpdateSignal();
+    });
 }
 
 // static

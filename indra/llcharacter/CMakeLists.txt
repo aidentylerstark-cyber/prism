@@ -66,3 +66,7 @@ target_link_libraries(
         llfilesystem
         llxml
     )
+
+if (USE_PRECOMPILED_HEADERS)
+  target_precompile_headers(llcharacter REUSE_FROM llprecompiled)
+endif ()

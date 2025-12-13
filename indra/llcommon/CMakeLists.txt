@@ -68,7 +68,7 @@ set(llcommon_SOURCE_FILES
     llmetricperformancetester.cpp
     llmortician.cpp
     llmutex.cpp
-    llptrto.cpp 
+    llptrto.cpp
     llpredicate.cpp
     llprocess.cpp
     llprocessor.cpp
@@ -108,7 +108,7 @@ set(llcommon_SOURCE_FILES
     workqueue.cpp
     StackWalker.cpp
     )
-    
+
 set(llcommon_HEADER_FILES
     CMakeLists.txt
 
@@ -255,14 +255,28 @@ set(llcommon_HEADER_FILES
     workqueue.h
     StackWalker.h
     )
-    
+
 if (DARWIN)
   list(APPEND llcommon_HEADER_FILES llsys_objc.h)
   list(APPEND llcommon_SOURCE_FILES llsys_objc.mm)
+
+  set_source_files_properties(
+    llsys_objc.mm
+    PROPERTIES
+    SKIP_PRECOMPILE_HEADERS TRUE
+  )
 endif (DARWIN)
 
 if (USE_TRACY)
   list(APPEND llcommon_SOURCE_FILES llprofiler.cpp)
+
+  # Skip precompiled headers on these files due to special compilation needs
+  set_source_files_properties(
+    llfasttimer.cpp
+    llprofiler.cpp
+    PROPERTIES
+    SKIP_PRECOMPILE_HEADERS TRUE
+  )
 endif ()
 
 list(APPEND llcommon_SOURCE_FILES ${llcommon_HEADER_FILES})
@@ -280,8 +294,12 @@ target_link_libraries(
         ll::sse2neon
     )
 
-target_include_directories(llcommon INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(llcommon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(llcommon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(llcommon PRIVATE ${CMAKE_SOURCE_DIR}/llmath)
+
+if (USE_PRECOMPILED_HEADERS)
+  target_precompile_headers(llcommon REUSE_FROM llprecompiled)
+endif ()
 
 add_dependencies(llcommon stage_third_party_libs)
 
@@ -299,16 +317,20 @@ if (LL_TESTS)
   LL_ADD_INTEGRATION_TEST(classic_callback "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(commonmisc "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lazyeventapi "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llapp "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llbase64 "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llcond "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lldate "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lldeadmantimer "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lldependencies "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(lldoubledispatch "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llerror "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lleventcoro "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lleventdispatcher "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lleventfilter "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llevents "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llframetimer "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llhttpdate "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llheteromap "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llinstancetracker "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llleap "" "${test_libs}")
@@ -318,9 +340,12 @@ if (LL_TESTS)
   LL_ADD_INTEGRATION_TEST(llprocessor "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llprocinfo "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llrand "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llsd "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llsdserialize "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llsdutil "" "llcommon;llmath")
   LL_ADD_INTEGRATION_TEST(llsingleton "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llstreamqueue "" "${test_libs}")
+  LL_ADD_INTEGRATION_TEST(llstreamtools "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(llstring "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lltrace "" "${test_libs}")
   LL_ADD_INTEGRATION_TEST(lltreeiterators "" "${test_libs}")
@@ -335,5 +360,12 @@ if (LL_TESTS)
 ## every build. It's to help a developer make implementation choices about
 ## throwing and catching exceptions.
 ##LL_ADD_INTEGRATION_TEST(llexception "" "${test_libs}")
+
+  # Skip precompiled header for tests that need special handling
+  set_source_files_properties(
+    tests/llsd_test.cpp
+    PROPERTIES
+    SKIP_PRECOMPILE_HEADERS TRUE
+  )
 
 endif (LL_TESTS)

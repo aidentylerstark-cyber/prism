@@ -36,7 +36,7 @@ cmake -P configure.cmake
 This will create a platform-specific build directory:
 - **Windows**: `build-vc170-64`
 - **Linux**: `build-linux-x86_64`
-- **macOS**: `build-darwin-x86_64`
+- **macOS**: `build-darwin-universal`
 
 ### Reconfigure (if needed)
 
@@ -46,7 +46,7 @@ After the initial configuration, the build can be reconfigured by running:
 
 - **Windows**: `cmake -B ./build-vc170-64 -S ./indra/`
 - **Linux**: `cmake -B ./build-linux-x86_64 -S ./indra/`
-- **macOS**: `cmake -B ./build-darwin-x86_64 -S ./indra/`
+- **macOS**: `cmake -B ./build-darwin-universal -S ./indra/`
 
 Additionally GUI based configuration can be used by replacing `cmake` with `cmake-gui` in the above commands.
 
@@ -57,7 +57,7 @@ Build the project by running:
 
 - **Windows:** `cmake --build build-vc170-64 --parallel`
 - **Linux:** `cmake --build build-linux-x86_64 --parallel`
-- **macOS:** `cmake --build build-darwin-x86_64 --parallel`
+- **macOS:** `cmake --build build-darwin-universal --parallel`
 
 ### Run Tests
 
@@ -65,7 +65,7 @@ Run the tests by running:
 
 - **Windows:** `cmake --build build-vc170-64 --parallel -t tests_ok`
 - **Linux:** `cmake --build build-linux-x86_64 --parallel -t tests_ok`
-- **macOS:** `cmake --build build-darwin-x86_64 --parallel -t tests_ok`
+- **macOS:** `cmake --build build-darwin-universal --parallel -t tests_ok`
 
 ## Contribute
 

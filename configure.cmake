@@ -4,10 +4,12 @@
 cmake_minimum_required(VERSION "3.20" FATAL_ERROR)
 
 string(TOLOWER ${CMAKE_HOST_SYSTEM_NAME} SYSTEM)
-set(ARCH "x86_64")
 if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Windows")
   set(BUILD_DIR "build-vc170-64")
+if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL "Darwin")
+  set(BUILD_DIR "build-darwin-universal")
 else()
+  set(ARCH "x86_64")
   set(BUILD_DIR "build-${SYSTEM}-${ARCH}")
 endif()
 

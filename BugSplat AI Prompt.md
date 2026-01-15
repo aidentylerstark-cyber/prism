@@ -24,3 +24,15 @@ Instances:
 - Explain the implementation of the suggested fix. Provide confidence from 1-4 on how certain you are that you fixed the underlying cause, not a symptom. Provide a brief justification for this rating.
 
 - For the suggested fix, explain how QA could verify that the issue has been patched successfully.
+
+- Look for indications of any of the following, and add a prominent note at the top of the crash writeup. Also, include a brief evaluation of whether this may be a proximate cause. Note why or why not.
+  - Resource exhaustion on a low-end machine
+  - Crash occurred after viewer had already disconnected
+  - High packet loss noted in logs
+
+- Add a prominent note at the top of the crash writeup if any of the following occurred:
+  - Crash happened before the user logged in
+  - Crashes that happen during the login process
+  - Crash happens when accessing inventory cache, including saving on disconnect
+  - Shader compilation
+

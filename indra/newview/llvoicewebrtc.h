@@ -81,6 +81,8 @@ public:
 
     const LLVoiceVersionInfo& getVersion() override;
 
+    void setVoiceServerVersion(const std::string& version);
+
     void updateSettings() override; // call after loading settings and whenever they change
 
     // Returns true if WebRTC has successfully logged in and is not in error state

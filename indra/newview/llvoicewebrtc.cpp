@@ -96,7 +96,7 @@ namespace {
 
     const uint32_t PEER_GAIN_CONVERSION_FACTOR = 220;
 
-    static const std::string REPORTED_VOICE_SERVER_TYPE = "Secondlife WebRTC Gateway";
+    static const std::string REPORTED_VOICE_SERVER_TYPE = "WebRTC Gateway";
 
     // Don't send positional updates more frequently than this:
     const F32 UPDATE_THROTTLE_SECONDS = 0.1f;
@@ -341,6 +341,11 @@ void LLWebRTCVoiceClient::LogMessage(llwebrtc::LLWebRTCLogCallback::LogLevel lev
 const LLVoiceVersionInfo& LLWebRTCVoiceClient::getVersion()
 {
     return mVoiceVersion;
+}
+
+void LLWebRTCVoiceClient::setVoiceServerVersion(const std::string& version)
+{
+    mVoiceVersion.serverVersion = version;
 }
 
 //---------------------------------------------------
@@ -3126,6 +3131,20 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
                     participant_elem.value().as_object()["j"].as_object()["p"].is_bool())
                 {
                     primary = participant_elem.value().as_object()["j"].as_object()["p"].as_bool();
+                }
+
+                if (primary)
+                {
+                    if (participant_elem.value().as_object()["j"].as_object().contains("v") &&
+                        participant_elem.value().as_object()["j"].as_object()["v"].is_string())
+                    {
+                        LLWebRTCVoiceClient::getInstance()->setVoiceServerVersion(
+                            participant_elem.value().as_object()["j"].as_object()["v"].as_string().c_str());
+                    }
+                    else
+                    {
+                        LLWebRTCVoiceClient::getInstance()->setVoiceServerVersion("");
+                    }
                 }
 
                 // track incoming participants that are muted so we can mute their connections (or set their volume)

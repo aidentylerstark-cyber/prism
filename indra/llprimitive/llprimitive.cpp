@@ -1403,7 +1403,7 @@ S32 LLPrimitive::unpackTEMessageInternal(LLTEContents& tec)
     // years the mesh asset upload pipeline suffered a bug where the server-side mesh
     // asset would cache the face_count of lower-LOD collision shape rather than of
     // the mesh at full glory. The result was: texture adjustments to unknown mesh
-    // faces would silently fail at the server. There is a similar client side-problem
+    // faces would silently fail at the server. There was a similar client side-problem
     // when mesh objects are loaded with low LOD shapes and server updates for missing
     // faces are silently dropped.
     //

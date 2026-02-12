@@ -740,7 +740,11 @@ std::string LLPrimitive::pCodeToString(const LLPCode pcode)
 
 void LLPrimitive::copyTEs(const LLPrimitive *primitivep)
 {
-    U8 num_tes = llmin(getNumTEs(), primitivep->getNumTEs());
+    U8 num_tes = llmin(getExpectedNumTEs(), primitivep->getNumTEs());
+    if (mTextureList.size() < num_tes)
+    {
+        mTextureList.setSize(num_tes);
+    }
     for (U8 i = 0; i < num_tes; i++)
     {
         mTextureList.copyTexture(i, *(primitivep->getTE(i)));
@@ -1459,6 +1463,18 @@ S32 LLPrimitive::unpackTEMessage(LLDataPacker &dp)
     if (!retval)
         return retval;
     return applyParsedTEMessage(tec);
+}
+
+U8  LLPrimitive::getExpectedNumTEs() const
+{
+    U8 expected_face_count = mTextureList.size();
+    if (mVolumep)
+    {
+        // for legacy prims the face count is implicit to the Volume params
+        // and may be larger than mTextureList.size() during initialization.
+        expected_face_count = llmax(mVolumep->getNumFaces(), expected_face_count);
+    }
+    return expected_face_count;
 }
 
 void LLPrimitive::copyTextureList(const LLPrimTextureList& other_list)

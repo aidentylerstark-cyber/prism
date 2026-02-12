@@ -1494,6 +1494,12 @@ void LLPrimitive::updateNumBumpmap(const U8 index, const U8 bump)
 
 U8* LLPrimitive::packTEMessageInternal(U8* cur_ptr) const
 {
+    U8 num_faces = getNumTEs();
+    if (num_faces == 0)
+    {
+        return cur_ptr;
+    }
+
     U8     image_ids[LLTEContents::MAX_TES*16];
     U8     colors[LLTEContents::MAX_TES*4];
     F32    scale_s[LLTEContents::MAX_TES];
@@ -1506,77 +1512,74 @@ U8* LLPrimitive::packTEMessageInternal(U8* cur_ptr) const
     U8     glow[LLTEContents::MAX_TES];
     U8     material_data[LLTEContents::MAX_TES*16];
 
-    U8 num_faces = getNumTEs();
     U8 last_face_index = llmin(getNumTEs(), LLTEContents::MAX_TES) - 1;
 
-    if (last_face_index > -1)
+    // ...if we hit the front, send one image id
+    LLColor4U coloru;
+    for (U8 face_index = 0; face_index <= last_face_index; face_index++)
     {
-        // ...if we hit the front, send one image id
-        LLColor4U coloru;
-        for (U8 face_index = 0; face_index <= last_face_index; face_index++)
-        {
-            // Directly sending image_ids is not safe!
-            memcpy(&image_ids[face_index*16], getTE(face_index)->getID().mData,16);  /* Flawfinder: ignore */
+        // Directly sending image_ids is not safe!
+        memcpy(&image_ids[face_index*16], getTE(face_index)->getID().mData,16);  /* Flawfinder: ignore */
 
-            // Cast LLColor4 to LLColor4U
-            coloru.setVec( getTE(face_index)->getColor() );
+        // Cast LLColor4 to LLColor4U
+        coloru.setVec( getTE(face_index)->getColor() );
 
-            // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
-            // as all zeros.  However, the subtraction and addition must be done in unsigned
-            // byte space, not in float space, otherwise off-by-one errors occur. JC
-            colors[4*face_index]     = 255 - coloru.mV[0];
-            colors[4*face_index + 1] = 255 - coloru.mV[1];
-            colors[4*face_index + 2] = 255 - coloru.mV[2];
-            colors[4*face_index + 3] = 255 - coloru.mV[3];
+        // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
+        // as all zeros.  However, the subtraction and addition must be done in unsigned
+        // byte space, not in float space, otherwise off-by-one errors occur. JC
+        colors[4*face_index]     = 255 - coloru.mV[0];
+        colors[4*face_index + 1] = 255 - coloru.mV[1];
+        colors[4*face_index + 2] = 255 - coloru.mV[2];
+        colors[4*face_index + 3] = 255 - coloru.mV[3];
 
-            const LLTextureEntry* te = getTE(face_index);
-            scale_s[face_index] = (F32) te->mScaleS;
-            scale_t[face_index] = (F32) te->mScaleT;
-            offset_s[face_index] = (S16) ll_round((llclamp(te->mOffsetS,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            offset_t[face_index] = (S16) ll_round((llclamp(te->mOffsetT,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            image_rot[face_index] = (S16) ll_round(((fmod(te->mRotation, F_TWO_PI)/F_TWO_PI) * TEXTURE_ROTATION_PACK_FACTOR));
-            bump[face_index] = te->getBumpShinyFullbright();
-            media_flags[face_index] = te->getMediaTexGen();
-            glow[face_index] = (U8) ll_round((llclamp(te->getGlow(), 0.0f, 1.0f) * (F32)0xFF));
+        const LLTextureEntry* te = getTE(face_index);
+        scale_s[face_index] = (F32) te->mScaleS;
+        scale_t[face_index] = (F32) te->mScaleT;
+        offset_s[face_index] = (S16) ll_round((llclamp(te->mOffsetS,-1.0f,1.0f) * (F32)0x7FFF)) ;
+        offset_t[face_index] = (S16) ll_round((llclamp(te->mOffsetT,-1.0f,1.0f) * (F32)0x7FFF)) ;
+        image_rot[face_index] = (S16) ll_round(((fmod(te->mRotation, F_TWO_PI)/F_TWO_PI) * TEXTURE_ROTATION_PACK_FACTOR));
+        bump[face_index] = te->getBumpShinyFullbright();
+        media_flags[face_index] = te->getMediaTexGen();
+        glow[face_index] = (U8) ll_round((llclamp(te->getGlow(), 0.0f, 1.0f) * (F32)0xFF));
 
-            // Directly sending material_ids is not safe!
-            memcpy(&material_data[face_index*16],getTE(face_index)->getMaterialID().get(),16);  /* Flawfinder: ignore */
-        }
-
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
-        *cur_ptr++ = 0;
-        if (mVolumep && mVolumep->getParams().isMeshSculpt())
-        {
-            cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-        }
-        else
-        {
-            cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-        }
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_t, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_s, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_t, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
-        if (mVolumep && mVolumep->getParams().isMeshSculpt())
-        {
-            // workaround for historical num_faces discrepancy between client and server
-            cur_ptr += pack_TE_facecount(cur_ptr, (U8 *)bump, last_face_index, MVT_U8);
-        }
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)glow, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)material_data, 16, last_face_index, MVT_LLUUID);
+        // Directly sending material_ids is not safe!
+        memcpy(&material_data[face_index*16],getTE(face_index)->getMaterialID().get(),16);  /* Flawfinder: ignore */
     }
+
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
+    *cur_ptr++ = 0;
+    if (mVolumep && mVolumep->getParams().isMeshSculpt())
+    {
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
+    }
+    else
+    {
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
+    }
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_t, 4 ,last_face_index, MVT_F32);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_s, 2 ,last_face_index, MVT_S16Array);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_t, 2 ,last_face_index, MVT_S16Array);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
+    if (mVolumep && mVolumep->getParams().isMeshSculpt())
+    {
+        // workaround for historical num_faces discrepancy between client and server
+        cur_ptr += pack_TE_facecount(cur_ptr, (U8 *)bump, last_face_index, MVT_U8);
+    }
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)glow, 1 ,last_face_index, MVT_U8);
+    *cur_ptr++ = 0;
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)material_data, 16, last_face_index, MVT_LLUUID);
+
     return cur_ptr;
 }
 //============================================================================

@@ -186,7 +186,6 @@ bool LLPrimitive::cleanupVolumeManager()
 //===============================================================
 LLPrimitive::LLPrimitive()
 :   mTextureList(),
-    mNumTEs(0),
     mMiscFlags(0),
     mNumBumpmapTEs(0)
 {
@@ -741,17 +740,8 @@ std::string LLPrimitive::pCodeToString(const LLPCode pcode)
 
 void LLPrimitive::copyTEs(const LLPrimitive *primitivep)
 {
-    U32 i;
-    if (primitivep->getExpectedNumTEs() != getExpectedNumTEs())
-    {
-        LL_WARNS() << "Primitives don't have same expected number of TE's" << LL_ENDL;
-    }
-    U32 num_tes = llmin(primitivep->getExpectedNumTEs(), getExpectedNumTEs());
-    if (mTextureList.size() < getExpectedNumTEs())
-    {
-        mTextureList.setSize(getExpectedNumTEs());
-    }
-    for (i = 0; i < num_tes; i++)
+    U8 num_tes = llmin(getNumTEs(), primitivep->getNumTEs());
+    for (U8 i = 0; i < num_tes; i++)
     {
         mTextureList.copyTexture(i, *(primitivep->getTE(i)));
     }
@@ -812,7 +802,6 @@ bool LLPrimitive::setVolume(const LLVolumeParams &volume_params, const S32 detai
     }
 
     setChanged(GEOMETRY);
-
 
     if (!mVolumep)
     {
@@ -1028,7 +1017,12 @@ bool LLPrimitive::setVolume(const LLVolumeParams &volume_params, const S32 detai
     sVolumeManager->unrefVolume(mVolumep);
     mVolumep = volumep;
 
-    setNumTEs(mVolumep->getNumFaces());
+    if (getNumTEs() < mVolumep->getNumFaces())
+    {
+        // Decreases in the LLVolume's notion of "num_faces" happens for LOD reasons
+        // which do not reflect actual change of faces of the object, so we ignore them.
+        setNumTEs(mVolumep->getNumFaces());
+    }
 #endif
     return true;
 }
@@ -1046,83 +1040,126 @@ bool LLPrimitive::setMaterial(U8 material)
     }
 }
 
-S32 LLPrimitive::packTEField(U8 *cur_ptr, U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type) const
-{
-    S32 face_index;
-    S32 i;
-    U64 exception_faces;
-    U8 *start_loc = cur_ptr;
-
-    htolememcpy(cur_ptr,data_ptr + (last_face_index * data_size), type, data_size);
-    cur_ptr += data_size;
-
-    for (face_index = last_face_index-1; face_index >= 0; face_index--)
-    {
-        bool already_sent = false;
-        for (i = face_index+1; i <= last_face_index; i++)
-        {
-            if (!memcmp(data_ptr+(data_size *face_index), data_ptr+(data_size *i), data_size))
-            {
-                already_sent = true;
-                break;
-            }
-        }
-
-        if (!already_sent)
-        {
-            exception_faces = 0;
-            for (i = face_index; i >= 0; i--)
-            {
-                if (!memcmp(data_ptr+(data_size *face_index), data_ptr+(data_size *i), data_size))
-                {
-                    exception_faces |= ((U64)1 << i);
-                }
-            }
-
-            //assign exception faces to cur_ptr
-            if (exception_faces >= ((U64)0x1 << 7))
-            {
-                if (exception_faces >= ((U64)0x1 << 14))
-                {
-                    if (exception_faces >= ((U64)0x1 << 21))
-                    {
-                        if (exception_faces >= ((U64)0x1 << 28))
-                        {
-                            if (exception_faces >= ((U64)0x1 << 35))
-                            {
-                                if (exception_faces >= ((U64)0x1 << 42))
-                                {
-                                    if (exception_faces >= ((U64)0x1 << 49))
-                                    {
-                                        *cur_ptr++ = (U8)(((exception_faces >> 49) & 0x7F) | 0x80);
-                                    }
-                                    *cur_ptr++ = (U8)(((exception_faces >> 42) & 0x7F) | 0x80);
-                                }
-                                *cur_ptr++ = (U8)(((exception_faces >> 35) & 0x7F) | 0x80);
-                            }
-                            *cur_ptr++ = (U8)(((exception_faces >> 28) & 0x7F) | 0x80);
-                        }
-                        *cur_ptr++ = (U8)(((exception_faces >> 21) & 0x7F) | 0x80);
-                    }
-                    *cur_ptr++ = (U8)(((exception_faces >> 14) & 0x7F) | 0x80);
-                }
-                *cur_ptr++ = (U8)(((exception_faces >> 7) & 0x7F) | 0x80);
-            }
-
-
-            *cur_ptr++ = (U8)(exception_faces & 0x7F);
-
-            htolememcpy(cur_ptr,data_ptr + (face_index * data_size), type, data_size);
-            cur_ptr += data_size;
-        }
-    }
-    return (S32)(cur_ptr - start_loc);
-}
-
 namespace
 {
+    // packs up to 64 bits as a variable bitfield into buffer
+    // returns pointer to byte that follows the packed bitfield
+    //
+    U8* pack_TE_variable_bitfield(U8* buffer, U64 bits)
+    {
+        // The bits are chunked into 7 per packed byte. The 8th bit of each byte is used
+        // as a continuation flag: all bytes will have the 8th bit set (1) except for the
+        // last one which will be unset (0).
+
+        if (bits >= ((U64)0x1 << 7))
+        {
+            if (bits >= ((U64)0x1 << 14))
+            {
+                if (bits >= ((U64)0x1 << 21))
+                {
+                    if (bits >= ((U64)0x1 << 28))
+                    {
+                        if (bits >= ((U64)0x1 << 35))
+                        {
+                            if (bits >= ((U64)0x1 << 42))
+                            {
+                                if (bits >= ((U64)0x1 << 49))
+                                {
+                                    *buffer++ = (U8)(((bits >> 49) & 0x7F) | 0x80);
+                                }
+                                *buffer++ = (U8)(((bits >> 42) & 0x7F) | 0x80);
+                            }
+                            *buffer++ = (U8)(((bits >> 35) & 0x7F) | 0x80);
+                        }
+                        *buffer++ = (U8)(((bits >> 28) & 0x7F) | 0x80);
+                    }
+                    *buffer++ = (U8)(((bits >> 21) & 0x7F) | 0x80);
+                }
+                *buffer++ = (U8)(((bits >> 14) & 0x7F) | 0x80);
+            }
+            *buffer++ = (U8)(((bits >> 7) & 0x7F) | 0x80);
+        }
+        *buffer++ = (U8)(bits & 0x7F); // don't set the continuation bit
+        return buffer;
+    }
+
+    // packs TextureEntry data encoded for wire transport
+    S32 pack_TE_field(U8 *cur_ptr, U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type)
+    {
+        U8 *start_loc = cur_ptr;
+
+        // pack the value at last_face_index as the "default value" which will be assigned to all faces
+        // that are not flagged as exceptions
+        htolememcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
+        cur_ptr += data_size;
+
+        // decrementing toward face_index=0 find all unique non-default values and bundle them together
+        // (variable_bitfield + value)
+        U64 packed_mask = ((U64)1 << last_face_index);
+        S32 max_index = static_cast<S32>(last_face_index);
+        for (S32 face_index = max_index-1; face_index >= 0; face_index--)
+        {
+            bool already_sent = packed_mask & ((U64)1 << face_index);
+            if (!already_sent)
+            {
+                // exception_faces is a bitmask of indices whose TE field is set to 'value'
+                U64 exception_faces = 0;
+                for (S32 i = face_index; i >= 0; i--)
+                {
+                    if (!memcmp(data_ptr+(data_size *face_index), data_ptr+(data_size *i), data_size))
+                    {
+                        exception_faces |= ((U64)1 << i);
+                    }
+                }
+
+                // pack the bitfield
+                cur_ptr = pack_TE_variable_bitfield(cur_ptr, exception_faces);
+
+                // pack the 'value'
+                htolememcpy(cur_ptr, data_ptr + (face_index * data_size), type, data_size);
+                cur_ptr += data_size;
+
+                packed_mask |= exception_faces;
+            }
+        }
+        return (S32)(cur_ptr - start_loc);
+    }
+
+    // packs the default value of a 1-byte TextureEntry field in a way that allows the
+    // receiving side to unambiguously determine the "number of faces" for the TextureEntry
+    S32 pack_TE_facecount(U8 *cur_ptr, U8 *data_ptr, U8 last_face_index, EMsgVariableType type)
+    {
+        // BUG: There can be a discrepancy in last_face_index as known to client and server
+        // (for mesh objects).
+        //
+        // WORKAROUND: We can inform the other side of our notion of last_face_index by
+        // re-packing the TE value of the last_face_index as an exception to the default.
+        // This is effectively a no-op since the value at last_face_index is, by protocol
+        // definition, the default (see implementation of the packing/unpacking algorithm
+        // in pack_TE_field() or unpack_TE_field() for details), however the receiving
+        // side will notice and interpret this as a declaration the number of faces.
+        //
+        // The workaround need only be packed once for any particular update, so it is
+        // always done for a TE field whose data_size is 1 byte.
+        //
+        U8 data_size = 1;
+
+        U8 *start_loc = cur_ptr;
+
+        // store a variable bitfield whose only bit corresponds to last_face_index
+        U64 bits = (U64)1 << last_face_index;
+        cur_ptr = pack_TE_variable_bitfield(cur_ptr, bits);
+
+        // pack the value
+        htolememcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
+        cur_ptr += data_size;
+
+        return (S32)(cur_ptr - start_loc);
+    }
+
+    // unpacks TextureEntry data encoded for wire transport
     template< typename T >
-    bool unpack_TEField(T dest[], U8 dest_count, U8 * &source, U8 *source_end, EMsgVariableType type)
+    bool unpack_TE_field(T dest[], U8& min_num_faces, U8 * &source, U8 *source_end, EMsgVariableType type)
     {
         const size_t size(sizeof(T));
 
@@ -1134,21 +1171,25 @@ namespace
             return false;
         }
 
-        // Extract the default value and fill the array.
+        // Extract the first value and fill the array with this "default value"
+        // Note: this corresponds to the property of the last face (client packs it first)
         htolememcpy(dest, source, type, size);
         source += size;
-        for (S32 idx = 1; idx < dest_count; ++idx)
+        for (U8 idx = 1; idx < LLTEContents::MAX_TES; ++idx)
         {
             dest[idx] = dest[0];
         }
 
         while (source < source_end)
         {
+            // Unpack the variable length bitfield:
+            // The flags are stored in the lower 7 bits of each byte while the 8th bit
+            // signals continuation: the final byte of the flags will have a zero 8th bit.
+            // Meanwhile each bit in the bitfield represents whether the subsequent value
+            // will be placed at the corresponding index of the 'dest' array.
             U64 index_flags(0);
             U8  sbit(0);
-
-            // Unpack the variable length bitfield. Each bit represents whether the following
-            // value will be placed at the corresponding array index.
+            U8  highest_flagged_index = 0;
             do
             {
                 if (source >= source_end)
@@ -1158,9 +1199,27 @@ namespace
                     return false;
                 }
 
+                // get ready to load the next 7 bits
+                index_flags <<= 7;
+                if (highest_flagged_index)
+                {
+                    highest_flagged_index += 7;
+                }
+
+                // copy 7 bits
                 sbit = *source++;
-                index_flags <<= 7;    // original code had this after?
-                index_flags |= (sbit & 0x7F);
+                U8 flags = (sbit & 0x7F);
+                index_flags |= flags;
+
+                if (flags && ! highest_flagged_index)
+                {
+                    // initialize highest_flagged_index
+                    while (flags > 1)
+                    {
+                        highest_flagged_index++;
+                        flags >>= 1;
+                    }
+                }
             } while (sbit & 0x80);
 
             if (!index_flags)
@@ -1176,12 +1235,13 @@ namespace
                 return false;
             }
 
-            // get the value for the indexs.
+            // After unpacking the bitfield get the value.
             T value;
             htolememcpy(&value, source, type, size);
             source += size;
 
-            for (S32 idx = 0; idx < dest_count; idx++)
+            // Store the value in the array at the flagged indices
+            for (U8 idx = 0; idx <= highest_flagged_index; idx++)
             {
                 if (index_flags & 1ULL << idx)
                 {
@@ -1189,6 +1249,11 @@ namespace
                 }
             }
 
+            // remember final_max index so we can add TEs if necessary
+            if (highest_flagged_index >= min_num_faces)
+            {
+                min_num_faces = highest_flagged_index + 1;
+            }
         }
         return true;
     }
@@ -1201,180 +1266,29 @@ namespace
 // Includes information about image ID, color, scale S,T, offset S,T and rotation
 bool LLPrimitive::packTEMessage(LLMessageSystem *mesgsys) const
 {
-    const U32 MAX_TES = 45;
-
-    U8     image_ids[MAX_TES*16];
-    U8     colors[MAX_TES*4];
-    F32    scale_s[MAX_TES];
-    F32    scale_t[MAX_TES];
-    S16    offset_s[MAX_TES];
-    S16    offset_t[MAX_TES];
-    S16    image_rot[MAX_TES];
-    U8     bump[MAX_TES];
-    U8     media_flags[MAX_TES];
-    U8     glow[MAX_TES];
-    U8     material_data[MAX_TES*16];
-
     const U32 MAX_TE_BUFFER = 4096;
     U8 packed_buffer[MAX_TE_BUFFER];
     U8 *cur_ptr = packed_buffer;
 
-    S32 last_face_index = llmin((U32) getNumTEs(), MAX_TES) - 1;
-
-    if (last_face_index > -1)
-    {
-        // ...if we hit the front, send one image id
-        S8 face_index;
-        LLColor4U coloru;
-        for (face_index = 0; face_index <= last_face_index; face_index++)
-        {
-            // Directly sending image_ids is not safe!
-            memcpy(&image_ids[face_index*16],getTE(face_index)->getID().mData,16);  /* Flawfinder: ignore */
-
-            // Cast LLColor4 to LLColor4U
-            coloru.setVec( getTE(face_index)->getColor() );
-
-            // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
-            // as all zeros.  However, the subtraction and addition must be done in unsigned
-            // byte space, not in float space, otherwise off-by-one errors occur. JC
-            colors[4*face_index]     = 255 - coloru.mV[0];
-            colors[4*face_index + 1] = 255 - coloru.mV[1];
-            colors[4*face_index + 2] = 255 - coloru.mV[2];
-            colors[4*face_index + 3] = 255 - coloru.mV[3];
-
-            const LLTextureEntry* te = getTE(face_index);
-            scale_s[face_index] = (F32) te->mScaleS;
-            scale_t[face_index] = (F32) te->mScaleT;
-            offset_s[face_index] = (S16) ll_round((llclamp(te->mOffsetS,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            offset_t[face_index] = (S16) ll_round((llclamp(te->mOffsetT,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            image_rot[face_index] = (S16) ll_round(((fmod(te->mRotation, F_TWO_PI)/F_TWO_PI) * TEXTURE_ROTATION_PACK_FACTOR));
-            bump[face_index] = te->getBumpShinyFullbright();
-            media_flags[face_index] = te->getMediaTexGen();
-            glow[face_index] = (U8) ll_round((llclamp(te->getGlow(), 0.0f, 1.0f) * (F32)0xFF));
-
-            // Directly sending material_ids is not safe!
-            memcpy(&material_data[face_index*16],getTE(face_index)->getMaterialID().get(),16);  /* Flawfinder: ignore */
-        }
-
-        cur_ptr += packTEField(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)scale_t, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)offset_s, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)offset_t, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)glow, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)material_data, 16, last_face_index, MVT_LLUUID);
-    }
+    cur_ptr = packTEMessageInternal(cur_ptr);
     mesgsys->addBinaryDataFast(_PREHASH_TextureEntry, packed_buffer, (S32)(cur_ptr - packed_buffer));
-
     return true;
 }
 
 
 bool LLPrimitive::packTEMessage(LLDataPacker &dp) const
 {
-    const U32 MAX_TES = 45;
-
-    U8     image_ids[MAX_TES*16];
-    U8     colors[MAX_TES*4];
-    F32    scale_s[MAX_TES];
-    F32    scale_t[MAX_TES];
-    S16    offset_s[MAX_TES];
-    S16    offset_t[MAX_TES];
-    S16    image_rot[MAX_TES];
-    U8     bump[MAX_TES];
-    U8     media_flags[MAX_TES];
-    U8     glow[MAX_TES];
-    U8     material_data[MAX_TES*16];
-
     const U32 MAX_TE_BUFFER = 4096;
     U8 packed_buffer[MAX_TE_BUFFER];
     U8 *cur_ptr = packed_buffer;
 
-    S32 last_face_index = getNumTEs() - 1;
-
-    if (last_face_index > -1)
-    {
-        // ...if we hit the front, send one image id
-        S8 face_index;
-        LLColor4U coloru;
-        for (face_index = 0; face_index <= last_face_index; face_index++)
-        {
-            // Directly sending image_ids is not safe!
-            memcpy(&image_ids[face_index*16],getTE(face_index)->getID().mData,16);  /* Flawfinder: ignore */
-
-            // Cast LLColor4 to LLColor4U
-            coloru.setVec( getTE(face_index)->getColor() );
-
-            // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
-            // as all zeros.  However, the subtraction and addition must be done in unsigned
-            // byte space, not in float space, otherwise off-by-one errors occur. JC
-            colors[4*face_index]     = 255 - coloru.mV[0];
-            colors[4*face_index + 1] = 255 - coloru.mV[1];
-            colors[4*face_index + 2] = 255 - coloru.mV[2];
-            colors[4*face_index + 3] = 255 - coloru.mV[3];
-
-            const LLTextureEntry* te = getTE(face_index);
-            scale_s[face_index] = (F32) te->mScaleS;
-            scale_t[face_index] = (F32) te->mScaleT;
-            offset_s[face_index] = (S16) ll_round((llclamp(te->mOffsetS,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            offset_t[face_index] = (S16) ll_round((llclamp(te->mOffsetT,-1.0f,1.0f) * (F32)0x7FFF)) ;
-            image_rot[face_index] = (S16) ll_round(((fmod(te->mRotation, F_TWO_PI)/F_TWO_PI) * TEXTURE_ROTATION_PACK_FACTOR));
-            bump[face_index] = te->getBumpShinyFullbright();
-            media_flags[face_index] = te->getMediaTexGen();
-            glow[face_index] = (U8) ll_round((llclamp(te->getGlow(), 0.0f, 1.0f) * (F32)0xFF));
-
-            // Directly sending material_ids is not safe!
-            memcpy(&material_data[face_index*16],getTE(face_index)->getMaterialID().get(),16);  /* Flawfinder: ignore */
-        }
-
-        cur_ptr += packTEField(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)scale_t, 4 ,last_face_index, MVT_F32);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)offset_s, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)offset_t, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)glow, 1 ,last_face_index, MVT_U8);
-        *cur_ptr++ = 0;
-        cur_ptr += packTEField(cur_ptr, (U8 *)material_data, 16, last_face_index, MVT_LLUUID);
-    }
-
+    cur_ptr = packTEMessageInternal(cur_ptr);
     dp.packBinaryData(packed_buffer, (S32)(cur_ptr - packed_buffer), "TextureEntry");
     return true;
 }
 
 S32 LLPrimitive::parseTEMessage(LLMessageSystem* mesgsys, char const* block_name, const S32 block_num, LLTEContents& tec)
 {
-    S32 retval = 0;
-    // temp buffer for material ID processing
-    // data will end up in tec.material_id[]
-    material_id_type material_data[LLTEContents::MAX_TES];
-
     if (block_num < 0)
     {
         tec.size = mesgsys->getSizeFast(block_name, _PREHASH_TextureEntry);
@@ -1387,7 +1301,7 @@ S32 LLPrimitive::parseTEMessage(LLMessageSystem* mesgsys, char const* block_name
     if (tec.size == 0)
     {
         tec.face_count = 0;
-        return retval;
+        return 0;
     }
     else if (tec.size >= LLTEContents::MAX_TE_BUFFER)
     {
@@ -1398,52 +1312,16 @@ S32 LLPrimitive::parseTEMessage(LLMessageSystem* mesgsys, char const* block_name
     // if block_num < 0 ask for block 0
     mesgsys->getBinaryDataFast(block_name, _PREHASH_TextureEntry, tec.packed_buffer, 0, std::max(block_num, 0), LLTEContents::MAX_TE_BUFFER - 1);
 
-    // The last field is not zero terminated.
-    // Rather than special case the upack functions.  Just make it 0x00 terminated.
-    tec.packed_buffer[tec.size] = 0x00;
-    ++tec.size;
-
-    tec.face_count = llmin((U32)getNumTEs(),(U32)LLTEContents::MAX_TES);
-
-    U8 *cur_ptr = tec.packed_buffer;
-    LL_DEBUGS("TEXTUREENTRY") << "Texture Entry with buffere sized: " << tec.size << LL_ENDL;
-    U8 *buffer_end = tec.packed_buffer + tec.size;
-
-    if (!(  unpack_TEField<LLUUID>(tec.image_data, tec.face_count, cur_ptr, buffer_end, MVT_LLUUID) &&
-            unpack_TEField<LLColor4U>(tec.colors, tec.face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<F32>(tec.scale_s, tec.face_count, cur_ptr, buffer_end, MVT_F32) &&
-            unpack_TEField<F32>(tec.scale_t, tec.face_count, cur_ptr, buffer_end, MVT_F32) &&
-            unpack_TEField<S16>(tec.offset_s, tec.face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<S16>(tec.offset_t, tec.face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<S16>(tec.image_rot, tec.face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<U8>(tec.bump, tec.face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<U8>(tec.media_flags, tec.face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<U8>(tec.glow, tec.face_count, cur_ptr, buffer_end, MVT_U8)))
-    {
-        LL_WARNS("TEXTUREENTRY") << "Failure parsing Texture Entry Message due to malformed TE Field! Dropping changes on the floor. " << LL_ENDL;
-        return 0;
-    }
-
-    if (cur_ptr >= buffer_end || !unpack_TEField<material_id_type>(material_data, tec.face_count, cur_ptr, buffer_end, MVT_LLUUID))
-    {
-        memset((void*)material_data, 0, sizeof(material_data));
-    }
-
-    for (U32 i = 0; i < tec.face_count; i++)
-    {
-        tec.material_ids[i].set(&(material_data[i]));
-    }
-
-    retval = 1;
-    return retval;
-    }
+    return unpackTEMessageInternal(tec);
+}
 
 S32 LLPrimitive::applyParsedTEMessage(LLTEContents& tec)
 {
     S32 retval = 0;
 
     LLColor4 color;
-    for (U32 i = 0; i < tec.face_count; i++)
+    U8 num_faces = llmin(mTextureList.size(), tec.face_count);
+    for (U8 i = 0; i < num_faces; i++)
     {
         LLUUID& req_id = ((LLUUID*)tec.image_data)[i];
         retval |= setTETexture(i, req_id);
@@ -1469,6 +1347,86 @@ S32 LLPrimitive::applyParsedTEMessage(LLTEContents& tec)
     return retval;
 }
 
+S32 LLPrimitive::unpackTEMessageInternal(LLTEContents& tec)
+{
+    // temp buffer for material ID processing
+    // data will end up in tec.material_ids[]
+    material_id_type material_data[LLTEContents::MAX_TES];
+
+    // The last field is not zero terminated.
+    // Rather than special case the unpack functions, just make it 0x00 terminated.
+    tec.packed_buffer[tec.size] = 0x00;
+    ++tec.size;
+
+    tec.face_count = llmin(getNumTEs(), LLTEContents::MAX_TES);
+
+    U8 *cur_ptr = tec.packed_buffer;
+    LL_DEBUGS("TEXTUREENTRY") << "Texture Entry with buffer sized: " << tec.size << LL_ENDL;
+    U8 *buffer_end = tec.packed_buffer + tec.size;
+
+    // unpack_TE_field() will increase new_face_count according to the index flags
+    // it finds in the packed data. If this Primitive is a mesh and new_face_count ends
+    // up larger than tec.face_count we'll increase the number of TextureEntries.
+    U8 new_face_count = 1;
+
+    if (!(  unpack_TE_field<LLUUID>(tec.image_data, new_face_count, cur_ptr, buffer_end, MVT_LLUUID) &&
+            unpack_TE_field<LLColor4U>(tec.colors, new_face_count, cur_ptr, buffer_end, MVT_U8) &&
+            unpack_TE_field<F32>(tec.scale_s, new_face_count, cur_ptr, buffer_end, MVT_F32) &&
+            unpack_TE_field<F32>(tec.scale_t, new_face_count, cur_ptr, buffer_end, MVT_F32) &&
+            unpack_TE_field<S16>(tec.offset_s, new_face_count, cur_ptr, buffer_end, MVT_S16) &&
+            unpack_TE_field<S16>(tec.offset_t, new_face_count, cur_ptr, buffer_end, MVT_S16) &&
+            unpack_TE_field<S16>(tec.image_rot, new_face_count, cur_ptr, buffer_end, MVT_S16) &&
+            unpack_TE_field<U8>(tec.bump, new_face_count, cur_ptr, buffer_end, MVT_U8) &&
+            unpack_TE_field<U8>(tec.media_flags, new_face_count, cur_ptr, buffer_end, MVT_U8) &&
+            unpack_TE_field<U8>(tec.glow, new_face_count, cur_ptr, buffer_end, MVT_U8)))
+    {
+        LL_WARNS("TEXTUREENTRY") << "Failure parsing Texture Entry Message due to malformed TE Field! Dropping changes on the floor. " << LL_ENDL;
+        return 0;
+    }
+
+    if (cur_ptr >= buffer_end || !unpack_TE_field<material_id_type>(material_data, new_face_count, cur_ptr, buffer_end, MVT_LLUUID))
+    {
+        memset((void*)material_data, 0, sizeof(material_data));
+    }
+
+    // BUG: server and client may disagree as to the face_count on a mesh Primitive.
+    //
+    // HISTORY: In the beginning face_count of a Primitive was implicit according to
+    // its VolumeParams hence the face_count was not encoded in TE field data. Later
+    // "mesh" Primitives (aka "Scuplties") were added but had only one face. Then
+    // non-Sculpty mesh Primitives were added with variable face_count (up to 8) and
+    // multiple LOD, each with a potentially different face_count, and for several
+    // years the mesh asset upload pipeline suffered a bug where the server-side mesh
+    // asset would cache the face_count of lower-LOD collision shape rather than of
+    // the mesh at full glory. The result was: texture adjustments to unknown mesh
+    // faces would silently fail at the server. There is a similar client side-problem
+    // when mesh objects are loaded with low LOD shapes and server updates for missing
+    // faces are silently dropped.
+    //
+    // WORKAROUND: face_count as known to each side can be encoded in the TE field
+    // data without adjusting protocol using a trick (see pack_TE_facecount() for
+    // details).
+    //
+    // TLDR: This is where we adjust our notion of mesh face_count when it is smaller
+    // than that of the other side.
+    if (mVolumep && mVolumep->getParams().isMeshSculpt())
+    {
+        U8 num_tes = getNumTEs();
+        if (num_tes < new_face_count && new_face_count <= LL_SCULPT_MESH_MAX_FACES)
+        {
+            tec.face_count = new_face_count;
+            setNumTEs(new_face_count);
+        }
+    }
+
+    for (U8 i = 0; i < tec.face_count; i++)
+    {
+        tec.material_ids[i].set(&(material_data[i]));
+    }
+
+    return 1;
+}
+
 S32 LLPrimitive::unpackTEMessage(LLMessageSystem* mesgsys, char const* block_name, const S32 block_num)
 {
     LLTEContents tec;
@@ -1480,128 +1438,27 @@ S32 LLPrimitive::unpackTEMessage(LLMessageSystem* mesgsys, char const* block_nam
 
 S32 LLPrimitive::unpackTEMessage(LLDataPacker &dp)
 {
-    // use a negative block_num to indicate a single-block read (a non-variable block)
-    S32 retval = 0;
-    constexpr U32 MAX_TES = 45;
-
-    // Avoid construction of 32 UUIDs per call
-    static LLMaterialID material_ids[MAX_TES];
-
-    constexpr U32 MAX_TE_BUFFER = 4096;
-    U8 packed_buffer[MAX_TE_BUFFER];
-    memset((void*)packed_buffer, 0, MAX_TE_BUFFER);
-
-    LLUUID      image_data[MAX_TES];
-    LLColor4U   colors[MAX_TES];
-    F32         scale_s[MAX_TES];
-    F32         scale_t[MAX_TES];
-    S16         offset_s[MAX_TES];
-    S16         offset_t[MAX_TES];
-    S16         image_rot[MAX_TES];
-    U8          bump[MAX_TES];
-    U8          media_flags[MAX_TES];
-    U8          glow[MAX_TES];
-    material_id_type material_data[MAX_TES];
-
-    memset((void*)scale_s, 0, sizeof(scale_s));
-    memset((void*)scale_t, 0, sizeof(scale_t));
-    memset((void*)offset_s, 0, sizeof(offset_s));
-    memset((void*)offset_t, 0, sizeof(offset_t));
-    memset((void*)image_rot, 0, sizeof(image_rot));
-    memset((void*)bump, 0, sizeof(bump));
-    memset((void*)media_flags, 0, sizeof(media_flags));
-    memset((void*)glow, 0, sizeof(glow));
-
-    S32 size;
-    U32 face_count = 0;
-
-    if (!dp.unpackBinaryData(packed_buffer, MAX_TE_BUFFER, size, "TextureEntry"))
+    LLTEContents tec;
+    if (!dp.unpackBinaryData(tec.packed_buffer, LLTEContents::MAX_TE_BUFFER, tec.size, "TextureEntry"))
     {
-        retval = TEM_INVALID;
         LL_WARNS() << "Bad texture entry block!  Abort!" << LL_ENDL;
-        return retval;
+        return TEM_INVALID;
     }
 
-    if (size == 0)
+    if (tec.size == 0)
     {
-        return retval;
-    }
-    else if (size >= MAX_TE_BUFFER)
-    {
-        LL_WARNS("TEXTUREENTRY") << "Excessive buffer size detected in Texture Entry! Truncating." << LL_ENDL;
-        size = MAX_TE_BUFFER - 1;
-    }
-
-    // The last field is not zero terminated.
-    // Rather than special case the upack functions.  Just make it 0x00 terminated.
-    packed_buffer[size] = 0x00;
-    ++size;
-    face_count = llmin((U32) getNumTEs(), MAX_TES);
-    U32 i;
-
-    U8 *cur_ptr = packed_buffer;
-    LL_DEBUGS("TEXTUREENTRY") << "Texture Entry with buffer sized: " << size << LL_ENDL;
-    U8 *buffer_end = packed_buffer + size;
-
-    if (!(  unpack_TEField<LLUUID>(image_data, face_count, cur_ptr, buffer_end, MVT_LLUUID) &&
-            unpack_TEField<LLColor4U>(colors, face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<F32>(scale_s, face_count, cur_ptr, buffer_end, MVT_F32) &&
-            unpack_TEField<F32>(scale_t, face_count, cur_ptr, buffer_end, MVT_F32) &&
-            unpack_TEField<S16>(offset_s, face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<S16>(offset_t, face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<S16>(image_rot, face_count, cur_ptr, buffer_end, MVT_S16) &&
-            unpack_TEField<U8>(bump, face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<U8>(media_flags, face_count, cur_ptr, buffer_end, MVT_U8) &&
-            unpack_TEField<U8>(glow, face_count, cur_ptr, buffer_end, MVT_U8)))
-    {
-        LL_WARNS("TEXTUREENTRY") << "Failure parsing Texture Entry Message due to malformed TE Field! Dropping changes on the floor. " << LL_ENDL;
         return 0;
     }
-
-    if (cur_ptr >= buffer_end || !unpack_TEField<material_id_type>(material_data, face_count, cur_ptr, buffer_end, MVT_LLUUID))
+    else if (tec.size >= LLTEContents::MAX_TE_BUFFER)
     {
-        memset((void*)material_data, 0, sizeof(material_data));
+        LL_WARNS("TEXTUREENTRY") << "Excessive buffer size detected in Texture Entry! Truncating." << LL_ENDL;
+        tec.size = LLTEContents::MAX_TE_BUFFER - 1;
     }
 
-    for (i = 0; i < face_count; i++)
-    {
-        material_ids[i].set(&(material_data[i]));
-    }
-
-    LLColor4 color;
-    for (i = 0; i < face_count; i++)
-    {
-        retval |= setTETexture(i, ((LLUUID*)image_data)[i]);
-        retval |= setTEScale(i, scale_s[i], scale_t[i]);
-        retval |= setTEOffset(i, (F32)offset_s[i] / (F32)0x7FFF, (F32) offset_t[i] / (F32) 0x7FFF);
-        retval |= setTERotation(i, ((F32)image_rot[i] / TEXTURE_ROTATION_PACK_FACTOR) * F_TWO_PI);
-        retval |= setTEBumpShinyFullbright(i, bump[i]);
-        retval |= setTEMediaTexGen(i, media_flags[i]);
-        retval |= setTEGlow(i, (F32)glow[i] / (F32)0xFF);
-        retval |= setTEMaterialID(i, material_ids[i]);
-
-        // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
-        // as all zeros.  However, the subtraction and addition must be done in unsigned
-        // byte space, not in float space, otherwise off-by-one errors occur. JC
-        color.mV[VRED]      = F32(255 - colors[i].mV[VRED])   / 255.f;
-        color.mV[VGREEN]    = F32(255 - colors[i].mV[VGREEN]) / 255.f;
-        color.mV[VBLUE]     = F32(255 - colors[i].mV[VBLUE])  / 255.f;
-        color.mV[VALPHA]    = F32(255 - colors[i].mV[VALPHA]) / 255.f;
-
-        retval |= setTEColor(i, color);
-    }
-
-    return retval;
-}
-
-U8  LLPrimitive::getExpectedNumTEs() const
-{
-    U8 expected_face_count = 0;
-    if (mVolumep)
-    {
-        expected_face_count = mVolumep->getNumFaces();
-    }
-    return expected_face_count;
+    S32 retval = unpackTEMessageInternal(tec);
+    if (!retval)
+        return retval;
+    return applyParsedTEMessage(tec);
 }
 
 void LLPrimitive::copyTextureList(const LLPrimTextureList& other_list)
@@ -1633,6 +1490,94 @@ void LLPrimitive::updateNumBumpmap(const U8 index, const U8 bump)
     }
 
     return;
+}
+
+U8* LLPrimitive::packTEMessageInternal(U8* cur_ptr) const
+{
+    U8     image_ids[LLTEContents::MAX_TES*16];
+    U8     colors[LLTEContents::MAX_TES*4];
+    F32    scale_s[LLTEContents::MAX_TES];
+    F32    scale_t[LLTEContents::MAX_TES];
+    S16    offset_s[LLTEContents::MAX_TES];
+    S16    offset_t[LLTEContents::MAX_TES];
+    S16    image_rot[LLTEContents::MAX_TES];
+    U8     bump[LLTEContents::MAX_TES];
+    U8     media_flags[LLTEContents::MAX_TES];
+    U8     glow[LLTEContents::MAX_TES];
+    U8     material_data[LLTEContents::MAX_TES*16];
+
+    U8 num_faces = getNumTEs();
+    U8 last_face_index = llmin(getNumTEs(), LLTEContents::MAX_TES) - 1;
+
+    if (last_face_index > -1)
+    {
+        // ...if we hit the front, send one image id
+        LLColor4U coloru;
+        for (U8 face_index = 0; face_index <= last_face_index; face_index++)
+        {
+            // Directly sending image_ids is not safe!
+            memcpy(&image_ids[face_index*16], getTE(face_index)->getID().mData,16);  /* Flawfinder: ignore */
+
+            // Cast LLColor4 to LLColor4U
+            coloru.setVec( getTE(face_index)->getColor() );
+
+            // Note:  This is an optimization to send common colors (1.f, 1.f, 1.f, 1.f)
+            // as all zeros.  However, the subtraction and addition must be done in unsigned
+            // byte space, not in float space, otherwise off-by-one errors occur. JC
+            colors[4*face_index]     = 255 - coloru.mV[0];
+            colors[4*face_index + 1] = 255 - coloru.mV[1];
+            colors[4*face_index + 2] = 255 - coloru.mV[2];
+            colors[4*face_index + 3] = 255 - coloru.mV[3];
+
+            const LLTextureEntry* te = getTE(face_index);
+            scale_s[face_index] = (F32) te->mScaleS;
+            scale_t[face_index] = (F32) te->mScaleT;
+            offset_s[face_index] = (S16) ll_round((llclamp(te->mOffsetS,-1.0f,1.0f) * (F32)0x7FFF)) ;
+            offset_t[face_index] = (S16) ll_round((llclamp(te->mOffsetT,-1.0f,1.0f) * (F32)0x7FFF)) ;
+            image_rot[face_index] = (S16) ll_round(((fmod(te->mRotation, F_TWO_PI)/F_TWO_PI) * TEXTURE_ROTATION_PACK_FACTOR));
+            bump[face_index] = te->getBumpShinyFullbright();
+            media_flags[face_index] = te->getMediaTexGen();
+            glow[face_index] = (U8) ll_round((llclamp(te->getGlow(), 0.0f, 1.0f) * (F32)0xFF));
+
+            // Directly sending material_ids is not safe!
+            memcpy(&material_data[face_index*16],getTE(face_index)->getMaterialID().get(),16);  /* Flawfinder: ignore */
+        }
+
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
+        *cur_ptr++ = 0;
+        if (mVolumep && mVolumep->getParams().isMeshSculpt())
+        {
+            cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
+        }
+        else
+        {
+            cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
+        }
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_t, 4 ,last_face_index, MVT_F32);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_s, 2 ,last_face_index, MVT_S16Array);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)offset_t, 2 ,last_face_index, MVT_S16Array);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
+        if (mVolumep && mVolumep->getParams().isMeshSculpt())
+        {
+            // workaround for historical num_faces discrepancy between client and server
+            cur_ptr += pack_TE_facecount(cur_ptr, (U8 *)bump, last_face_index, MVT_U8);
+        }
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)glow, 1 ,last_face_index, MVT_U8);
+        *cur_ptr++ = 0;
+        cur_ptr += pack_TE_field(cur_ptr, (U8 *)material_data, 16, last_face_index, MVT_LLUUID);
+    }
+    return cur_ptr;
 }
 //============================================================================
 

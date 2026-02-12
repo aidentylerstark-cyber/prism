@@ -78,8 +78,8 @@ public:
     // IMPORTANT! -- if you use this function you must check the return value
     S32 takeTexture(const U8 index, LLTextureEntry* te);
 
-//  // copies contents of 'entry' and stores it in 'index' slot
-//  void copyTexture(const U8 index, const LLTextureEntry* entry);
+    // copies contents of 'entry' and stores it in 'index' slot
+    S32 copyTexture(const U8 index, const LLTextureEntry* entry);
 
     // returns pointer to texture at 'index' slot
     LLTextureEntry* getTexture(const U8 index) const;
@@ -109,10 +109,9 @@ public:
 
     LLMaterialPtr getMaterialParams(const U8 index);
 
-    S32 size() const;
+    U8 size() const;
 
-//  void forceResize(S32 new_size);
-    void setSize(S32 new_size);
+    void setSize(U8 new_size);
 
     void setAllIDs(const LLUUID& id);
 protected:

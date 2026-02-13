@@ -106,7 +106,7 @@ S32 LLPrimTextureList::setTexGen(const U8 index, const U8 texgen) { return TEM_C
 LLMaterialPtr LLPrimTextureList::getMaterialParams(const U8 index) { return LLMaterialPtr(); }
 void LLPrimTextureList::copy(LLPrimTextureList const & ptl) { mEntryList = ptl.mEntryList; } // do we need to call getTexture()->newCopy()?
 void LLPrimTextureList::take(LLPrimTextureList &other_list) { }
-void LLPrimTextureList::setSize(U32 new_size) { mEntryList.resize(new_size); }
+void LLPrimTextureList::setSize(U8 new_size) { mEntryList.resize(new_size); }
 void LLPrimTextureList::setAllIDs(const LLUUID &id) { }
 LLTextureEntry * LLPrimTextureList::getTexture(const U8 index) const { return nullptr; }
 U8 LLPrimTextureList::size() const { return static_cast<U8>(mEntryList.size()); }

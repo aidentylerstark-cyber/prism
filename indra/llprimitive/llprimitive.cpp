@@ -1023,10 +1023,10 @@ bool LLPrimitive::setVolume(const LLVolumeParams &volume_params, const S32 detai
 
     if (getNumTEs() < mVolumep->getNumFaces())
     {
-        // Decreases in the LLVolume's notion of "num_faces" happens for LOD reasons
-        // which do not reflect actual change of faces of the object, so we ignore them.
         setNumTEs(mVolumep->getNumFaces());
     }
+    // else: Decreases in the LLVolume's notion of "num_faces" happens for LOD reasons
+    // which do not reflect actual change of faces of the object, so we ignore them.
 #endif
     return true;
 }
@@ -1564,14 +1564,7 @@ U8* LLPrimitive::packTEMessageInternal(U8* cur_ptr) const
 
     cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_ids, sizeof(LLUUID),last_face_index, MVT_LLUUID);
     *cur_ptr++ = 0;
-    if (mVolumep && mVolumep->getParams().isMeshSculpt())
-    {
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-    }
-    else
-    {
-        cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
-    }
+    cur_ptr += pack_TE_field(cur_ptr, (U8 *)colors, 4 ,last_face_index, MVT_U8);
     *cur_ptr++ = 0;
     cur_ptr += pack_TE_field(cur_ptr, (U8 *)scale_s, 4 ,last_face_index, MVT_F32);
     *cur_ptr++ = 0;

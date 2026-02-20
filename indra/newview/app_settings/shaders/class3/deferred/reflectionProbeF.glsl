@@ -498,7 +498,7 @@ float sphereWeight(vec3 pos, vec3 dir, vec3 origin, float r, vec4 i, out float d
 // c - center of probe
 // r2 - radius of probe squared
 // i - index of probe
-vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c, int i)
+vec4 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c, int i)
 {
     // parallax adjustment
     vec3 v;
@@ -528,9 +528,10 @@ vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c,
 
     v = env_mat * v;
 
-    vec4 ret = textureLod(reflectionProbes, vec4(v.xyz, refIndex[i].x), lod) * refParams[i].y;
+    vec4 probeSample = textureLod(reflectionProbes, vec4(v.xyz, refIndex[i].x), lod);
+    probeSample.rgb *= refParams[i].y;
 
-    return ret.rgb;
+    return vec4(probeSample.rgb, probeSample.a);
 }
 
 // Tap an irradiance map
@@ -575,6 +576,11 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
 
 vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
 {
+    // Sample void probe ONCE using original direction
+    vec3 voidDir = env_mat * dir;
+    vec4 voidSample = textureLod(reflectionProbes, vec4(voidDir, 0), lod);
+    vec3 voidColor = voidSample.rgb * refParams[0].y;
+
     float wsum[2];
     wsum[0] = 0;
     wsum[1] = 0;
@@ -599,12 +605,15 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
 
         float w = 0;
         float dw = 0;
-        vec3 refcol;
+        vec4 refcol;
 
         {
             refcol = tapRefMap(pos, dir, w, dw, lod, refSphere[i].xyz, i);
 
-            col[p] += refcol.rgb*w;
+            // Blend with void probe based on alpha: alpha=0 (geometry) uses probe, alpha=1 (sky) uses void
+            vec3 blended = mix(refcol.rgb, voidColor, refcol.a);
+
+            col[p] += blended*w;
             wsum[p] += w;
             dwsum[p] += dw;
         }

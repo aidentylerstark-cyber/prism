@@ -330,6 +330,7 @@ bool    LLPipeline::sUseFarClip = true;
 bool    LLPipeline::sShadowRender = false;
 bool    LLPipeline::sRenderGlow = false;
 bool    LLPipeline::sReflectionRender = false;
+bool    LLPipeline::sDefaultProbeRender = false;
 bool    LLPipeline::sDistortionRender = false;
 bool    LLPipeline::sImpostorRender = false;
 bool    LLPipeline::sImpostorRenderAlphaDepthPass = false;
@@ -8616,6 +8617,10 @@ void LLPipeline::renderDeferredLighting()
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
+
+            // Pass cube_snapshot and default_probe_render flags to preserve alpha when rendering to reflection probes
+            soften_shader.uniform1i(LLShaderMgr::CUBE_SNAPSHOT, gCubeSnapshot ? 1 : 0);
+            soften_shader.uniform1i(LLShaderMgr::DEFAULT_PROBE_RENDER, LLPipeline::sDefaultProbeRender ? 1 : 0);
 
             {
                 LLGLDepthTest depth(GL_FALSE);

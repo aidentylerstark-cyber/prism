@@ -281,5 +281,23 @@ void main()
         final_scale = 1.1;
 
     frag_color.rgb = clampHDRRange(color.rgb * final_scale); //output linear since local lights will be added to this shader's results
-    frag_color.a = 0.0;
+
+    // Alpha handling for reflection probe cubemaps
+    if (cube_snapshot != 0)
+    {
+        if (GET_GBUFFER_FLAG(gb.gbufferFlag, GBUFFER_FLAG_SKIP_ATMOS))
+        {
+            // Sky/clouds: write 1.0 alpha (will use void probe)
+            frag_color.a = 1.0;
+        }
+        else
+        {
+            // Everything else: write 0.0 alpha (will use local probe)
+            frag_color.a = 0.0;
+        }
+    }
+    else
+    {
+        frag_color.a = 0.0;
+    }
 }

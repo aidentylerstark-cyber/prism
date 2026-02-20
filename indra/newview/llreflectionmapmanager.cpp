@@ -274,7 +274,7 @@ void LLReflectionMapManager::update()
 
     if (!mRenderTarget.isComplete())
     {
-        U32 color_fmt = render_hdr ? GL_R11F_G11F_B10F : GL_RGB8;
+        U32 color_fmt = render_hdr ? GL_RGBA16F : GL_RGBA8;
         U32 targetRes = mProbeResolution * 4; // super sample
         mRenderTarget.allocate(targetRes, targetRes, color_fmt, true);
     }
@@ -287,7 +287,7 @@ void LLReflectionMapManager::update()
         mMipChain.resize(count);
         for (U32 i = 0; i < count; ++i)
         {
-            mMipChain[i].allocate(res, res, render_hdr ? GL_R11F_G11F_B10F : GL_RGB8);
+            mMipChain[i].allocate(res, res, render_hdr ? GL_RGBA16F : GL_RGBA8);
             res /= 2;
         }
     }
@@ -783,7 +783,9 @@ void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
         gPipeline.andRenderTypeMask(LLPipeline::RENDER_TYPE_SKY, LLPipeline::RENDER_TYPE_WL_SKY,
             LLPipeline::RENDER_TYPE_WATER, LLPipeline::RENDER_TYPE_VOIDWATER, LLPipeline::RENDER_TYPE_CLOUDS, LLPipeline::RENDER_TYPE_TERRAIN, LLPipeline::END_RENDER_TYPES);
 
+        LLPipeline::sDefaultProbeRender = true;
         probe->update(mRenderTarget.getWidth(), face);
+        LLPipeline::sDefaultProbeRender = false;
 
         gPipeline.popRenderTypeMask();
     }
@@ -1456,10 +1458,11 @@ void LLReflectionMapManager::initReflectionMaps()
 
                 // store mReflectionProbeCount+2 cube maps, final two cube maps are used for render target and radiance map generation
                 // source)
-                mTexture->allocate(mProbeResolution, 3, mReflectionProbeCount + 2, true, render_hdr);
+                // Use 4 components to include alpha channel for sky transparency control
+                mTexture->allocate(mProbeResolution, 4, mReflectionProbeCount + 2, true, render_hdr);
 
                 mIrradianceMaps = new LLCubeMapArray();
-                mIrradianceMaps->allocate(LL_IRRADIANCE_MAP_RESOLUTION, 3, mReflectionProbeCount, false, render_hdr);
+                mIrradianceMaps->allocate(LL_IRRADIANCE_MAP_RESOLUTION, 4, mReflectionProbeCount, false, render_hdr);
             }
         }
 

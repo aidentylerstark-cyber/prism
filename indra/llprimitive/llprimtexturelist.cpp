@@ -86,8 +86,8 @@ void LLPrimTextureList::copy(const LLPrimTextureList& other_list)
     U8 this_size = static_cast<U8>(mEntryList.size());
     U8 other_size = static_cast<U8>(other_list.mEntryList.size());
 
-    llassert(this_size <= MAX_TES);
-    llassert(other_size <= MAX_TES);
+    llassert(this_size <= LLTEContents::MAX_TES);
+    llassert(other_size <= LLTEContents::MAX_TES);
     llassert(other_size > 0);
 
     if (this_size > other_size)

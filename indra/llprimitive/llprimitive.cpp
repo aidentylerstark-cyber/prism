@@ -1095,7 +1095,7 @@ namespace
     /// @param data_ptr Source array of field values to pack.
     /// @param data_size Size in bytes of each field value.
     /// @param last_face_index Index of the last face (used as default value).
-    /// @param type Informs htonmemcpy() how to copy bytes to wire format.
+    /// @param type Informs htolememcpy() how to copy bytes to wire format.
     /// @return Number of bytes written to the buffer.
     S32 pack_TE_field(U8 *cur_ptr, U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type)
     {
@@ -1145,7 +1145,7 @@ namespace
     /// @param cur_ptr Destination buffer for packed data.
     /// @param data_ptr Source array of field values.
     /// @param last_face_index Index of the last face.
-    /// @param type Informs htonmemcpy() how to copy bytes to wire format.
+    /// @param type Informs htolememcpy() how to copy bytes to wire format.
     /// @return Number of bytes written to the buffer.
     S32 pack_TE_facecount(U8 *cur_ptr, U8 *data_ptr, U8 last_face_index, EMsgVariableType type)
     {
@@ -1172,7 +1172,7 @@ namespace
             cur_ptr = pack_TE_variable_bitfield(cur_ptr, bits);
 
             // pack the value
-            htonmemcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
+            htolememcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
             cur_ptr += data_size;
         }
 
@@ -1187,7 +1187,7 @@ namespace
     ///        would fit all of the packed data".
     /// @param source Points at the first byte of packed data (will be advanced).
     /// @param source_end Points at the last byte of packed data.
-    /// @param type Informs htonmemcpy() how to copy bytes from wire format.
+    /// @param type Informs htolememcpy() how to copy bytes from wire format.
     /// @return True on success, false otherwise.
     template< typename T >
     bool unpack_TE_field(T dest[], U8& min_num_faces, U8 * &source, U8 *source_end, EMsgVariableType type)
@@ -1206,9 +1206,9 @@ namespace
         // Note: this corresponds to the property of the last face (client packs it first).
         // This also initializes the destination array which is why we don't need to explicitly
         // initialize the member arrays in TEData.
-        htonmemcpy(dest, source, type, size);
+        htolememcpy(dest, source, type, size);
         source += size;
-        for (U32 idx = 1; idx < MAX_TES; ++idx)
+        for (U32 idx = 1; idx < LLTEContents::MAX_TES; ++idx)
         {
             dest[idx] = dest[0];
         }
@@ -1257,7 +1257,7 @@ namespace
 
             // After unpacking the bitfield get the value.
             T value;
-            htonmemcpy(&value, source, type, size);
+            htolememcpy(&value, source, type, size);
             source += size;
 
             // Store the value in the array at the flagged indices

@@ -9302,6 +9302,17 @@
     <key>Value</key>
     <integer>1</integer>
   </map>
+    <key>RenderReflectionProbeQuality</key>
+    <map>
+        <key>Comment</key>
+        <string>Quality of reflection probe rendering. (0 - Low quality RGB only, 1 - Medium quality with alpha preservation for sky blending)</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>S32</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
     <key>RenderReflectionProbeDynamicAllocation</key>
     <map>
         <key>Comment</key>

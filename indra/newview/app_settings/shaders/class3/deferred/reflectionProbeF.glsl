@@ -576,10 +576,12 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
 
 vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
 {
-    // Sample void probe ONCE using original direction
+#ifdef REFLECTION_PROBE_MED_QUALITY
+    // Sample void probe ONCE using original direction (medium quality mode and above)
     vec3 voidDir = env_mat * dir;
     vec4 voidSample = textureLod(reflectionProbes, vec4(voidDir, 0), lod);
     vec3 voidColor = voidSample.rgb * refParams[0].y;
+#endif
 
     float wsum[2];
     wsum[0] = 0;
@@ -610,8 +612,15 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
         {
             refcol = tapRefMap(pos, dir, w, dw, lod, refSphere[i].xyz, i);
 
-            // Blend with void probe based on alpha: alpha=0 (geometry) uses probe, alpha=1 (sky) uses void
-            vec3 blended = mix(refcol.rgb, voidColor, refcol.a);
+#ifdef REFLECTION_PROBE_MED_QUALITY
+            // Medium quality and above: Blend with void probe based on alpha: alpha=0 (geometry) uses probe, alpha=1 (sky) uses void
+            // Square the alpha to make the blend softer at edges (helps with supersampled subpixel blending)
+            float blend_factor = refcol.a * refcol.a;
+            vec3 blended = mix(refcol.rgb, voidColor, blend_factor);
+#else
+            // Low quality: No alpha blending, just use probe color
+            vec3 blended = refcol.rgb;
+#endif
 
             col[p] += blended*w;
             wsum[p] += w;

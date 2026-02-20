@@ -8597,7 +8597,8 @@ void LLPipeline::renderDeferredLighting()
 
         if (RenderDeferredAtmospheric)
         {  // apply sunlight contribution
-            LLGLSLShader &soften_shader = gDeferredSoftenProgram;
+            // Use cube snapshot variant shader when rendering to reflection probes
+            LLGLSLShader &soften_shader = gCubeSnapshot ? gDeferredSoftenCubeProgram : gDeferredSoftenProgram;
 
             LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("renderDeferredLighting - atmospherics");
             LL_PROFILE_GPU_ZONE("atmospherics");
@@ -8618,9 +8619,11 @@ void LLPipeline::renderDeferredLighting()
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
 
-            // Pass cube_snapshot and default_probe_render flags to preserve alpha when rendering to reflection probes
-            soften_shader.uniform1i(LLShaderMgr::CUBE_SNAPSHOT, gCubeSnapshot ? 1 : 0);
-            soften_shader.uniform1i(LLShaderMgr::DEFAULT_PROBE_RENDER, LLPipeline::sDefaultProbeRender ? 1 : 0);
+            // Pass default_probe_render flag when rendering to reflection probes
+            if (gCubeSnapshot)
+            {
+                soften_shader.uniform1i(LLShaderMgr::DEFAULT_PROBE_RENDER, LLPipeline::sDefaultProbeRender ? 1 : 0);
+            }
 
             {
                 LLGLDepthTest depth(GL_FALSE);

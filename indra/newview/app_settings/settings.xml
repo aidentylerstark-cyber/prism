@@ -9389,7 +9389,7 @@
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>2.0</real>
+    <real>0.5</real>
   </map>
   <key>RenderReflectionProbeLevel</key>
   <map>

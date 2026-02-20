@@ -1046,9 +1046,11 @@ bool LLPrimitive::setMaterial(U8 material)
 
 namespace
 {
-    // packs up to 64 bits as a variable bitfield into buffer
-    // returns pointer to byte that follows the packed bitfield
-    //
+    /// Packs up to 64 bits as a variable bitfield into buffer.
+    ///
+    /// @param buffer Destination buffer for the packed bitfield.
+    /// @param bits The bits to pack (up to 64 bits).
+    /// @return Pointer to the byte that follows the packed bitfield.
     U8* pack_TE_variable_bitfield(U8* buffer, U64 bits)
     {
         // The bits are chunked into 7 per packed byte. The 8th bit of each byte is used
@@ -1083,11 +1085,18 @@ namespace
             }
             *buffer++ = (U8)(((bits >> 7) & 0x7F) | 0x80);
         }
-        *buffer++ = (U8)(bits & 0x7F); // don't set the continuation bit
+        *buffer++ = (U8)(bits & 0x7F); // don't set the continuation bit in the final byte
         return buffer;
     }
 
-    // packs TextureEntry data encoded for wire transport
+    /// Packs TextureEntry data encoded for wire transport.
+    ///
+    /// @param cur_ptr Destination buffer for packed data.
+    /// @param data_ptr Source array of field values to pack.
+    /// @param data_size Size in bytes of each field value.
+    /// @param last_face_index Index of the last face (used as default value).
+    /// @param type Informs htonmemcpy() how to copy bytes to wire format.
+    /// @return Number of bytes written to the buffer.
     S32 pack_TE_field(U8 *cur_ptr, U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type)
     {
         U8 *start_loc = cur_ptr;
@@ -1129,8 +1138,15 @@ namespace
         return (S32)(cur_ptr - start_loc);
     }
 
-    // packs the default value of a 1-byte TextureEntry field in a way that allows the
-    // receiving side to unambiguously determine the "number of faces" for the TextureEntry
+    /// Packs the default value of a 1-byte TextureEntry field in a way that allows
+    /// the receiving side to unambiguously determine the "number of faces" for the
+    /// TextureEntry.
+    ///
+    /// @param cur_ptr Destination buffer for packed data.
+    /// @param data_ptr Source array of field values.
+    /// @param last_face_index Index of the last face.
+    /// @param type Informs htonmemcpy() how to copy bytes to wire format.
+    /// @return Number of bytes written to the buffer.
     S32 pack_TE_facecount(U8 *cur_ptr, U8 *data_ptr, U8 last_face_index, EMsgVariableType type)
     {
         // BUG: There can be a discrepancy in last_face_index as known to client and server
@@ -1142,26 +1158,37 @@ namespace
         // definition, the default (see implementation of the packing/unpacking algorithm
         // in pack_TE_field() or unpack_TE_field() for details), however the receiving
         // side will notice and interpret this as a declaration the number of faces.
-        //
-        // The workaround need only be packed once for any particular update, so it is
-        // always done for a TE field whose data_size is 1 byte.
-        //
-        U8 data_size = 1;
 
         U8 *start_loc = cur_ptr;
+        if (last_face_index > 0)
+        {
+            // The workaround need only be packed once for any particular update, so it is
+            // always done for a TE field whose data_size is 1 byte.
+            //
+            U8 data_size = 1;
 
-        // store a variable bitfield whose only bit corresponds to last_face_index
-        U64 bits = (U64)1 << last_face_index;
-        cur_ptr = pack_TE_variable_bitfield(cur_ptr, bits);
+            // store a variable bitfield whose only bit corresponds to last_face_index
+            U64 bits = (U64)1 << last_face_index;
+            cur_ptr = pack_TE_variable_bitfield(cur_ptr, bits);
 
-        // pack the value
-        htolememcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
-        cur_ptr += data_size;
+            // pack the value
+            htonmemcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
+            cur_ptr += data_size;
+        }
 
         return (S32)(cur_ptr - start_loc);
     }
 
-    // unpacks TextureEntry data encoded for wire transport
+    /// Unpacks TextureEntry data encoded for wire transport.
+    ///
+    /// @param dest Array where unpacked values will be stored.
+    /// @param new_face_count Will be updated if data packed was for a larger number of faces.
+    ///        In other words: the variable represents "the smallest number of faces that
+    ///        would fit all of the packed data".
+    /// @param source Points at the first byte of packed data (will be advanced).
+    /// @param source_end Points at the last byte of packed data.
+    /// @param type Informs htonmemcpy() how to copy bytes from wire format.
+    /// @return True on success, false otherwise.
     template< typename T >
     bool unpack_TE_field(T dest[], U8& min_num_faces, U8 * &source, U8 *source_end, EMsgVariableType type)
     {
@@ -1176,10 +1203,12 @@ namespace
         }
 
         // Extract the first value and fill the array with this "default value"
-        // Note: this corresponds to the property of the last face (client packs it first)
-        htolememcpy(dest, source, type, size);
+        // Note: this corresponds to the property of the last face (client packs it first).
+        // This also initializes the destination array which is why we don't need to explicitly
+        // initialize the member arrays in TEData.
+        htonmemcpy(dest, source, type, size);
         source += size;
-        for (U8 idx = 1; idx < LLTEContents::MAX_TES; ++idx)
+        for (U32 idx = 1; idx < MAX_TES; ++idx)
         {
             dest[idx] = dest[0];
         }
@@ -1192,8 +1221,8 @@ namespace
             // Meanwhile each bit in the bitfield represents whether the subsequent value
             // will be placed at the corresponding index of the 'dest' array.
             U64 index_flags(0);
+            S32 byte_index = 0;
             U8  sbit(0);
-            U8  highest_flagged_index = 0;
             do
             {
                 if (source >= source_end)
@@ -1205,25 +1234,12 @@ namespace
 
                 // get ready to load the next 7 bits
                 index_flags <<= 7;
-                if (highest_flagged_index)
-                {
-                    highest_flagged_index += 7;
-                }
 
                 // copy 7 bits
                 sbit = *source++;
                 U8 flags = (sbit & 0x7F);
                 index_flags |= flags;
-
-                if (flags && ! highest_flagged_index)
-                {
-                    // initialize highest_flagged_index
-                    while (flags > 1)
-                    {
-                        highest_flagged_index++;
-                        flags >>= 1;
-                    }
-                }
+                byte_index++;
             } while (sbit & 0x80);
 
             if (!index_flags)
@@ -1241,22 +1257,25 @@ namespace
 
             // After unpacking the bitfield get the value.
             T value;
-            htolememcpy(&value, source, type, size);
+            htonmemcpy(&value, source, type, size);
             source += size;
 
             // Store the value in the array at the flagged indices
-            for (U8 idx = 0; idx <= highest_flagged_index; idx++)
+            U8 i = 0;
+            while (index_flags > 0)
             {
-                if (index_flags & 1ULL << idx)
+                if (index_flags & 0x01)
                 {
-                    dest[idx] = value;
+                    dest[i] = value;
                 }
+                index_flags >>= 1;
+                i++;
             }
 
-            // remember final_max index so we can add TEs if necessary
-            if (highest_flagged_index >= min_num_faces)
+            // update min_num_faces
+            if (i > min_num_faces)
             {
-                min_num_faces = highest_flagged_index + 1;
+                min_num_faces = i;
             }
         }
         return true;

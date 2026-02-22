@@ -2613,7 +2613,7 @@ void LLPipeline::doOcclusion(LLCamera& camera)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     LL_PROFILE_GPU_ZONE("doOcclusion");
-    llassert(!gCubeSnapshot);
+    llassert(!gCubeSnapshot || sShadowRender);
 
     if (sReflectionProbesEnabled && sUseOcclusion > 1 && !LLPipeline::sShadowRender && !gCubeSnapshot)
     {
@@ -9483,10 +9483,6 @@ void LLPipeline::renderShadow(const glm::mat4& view, const glm::mat4& proj, LLCa
 
     LLPipeline::sShadowRender = true;
 
-    // disable occlusion culling during shadow render
-    U32 saved_occlusion = sUseOcclusion;
-    sUseOcclusion = 0;
-
     // List of render pass types that use the prim volume as the shadow,
     // ignoring textures.
     static const U32 types[] = {
@@ -9675,8 +9671,6 @@ void LLPipeline::renderShadow(const glm::mat4& view, const glm::mat4& proj, LLCa
     gGL.popMatrix();
     gGLLastMatrix = NULL;
 
-    // reset occlusion culling flag
-    sUseOcclusion = saved_occlusion;
     LLPipeline::sShadowRender = false;
 }
 
@@ -9918,8 +9912,6 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
 
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE; //LL_RECORD_BLOCK_TIME(FTM_GEN_SUN_SHADOW);
     LL_PROFILE_GPU_ZONE("generateSunShadow");
-
-    LLDisableOcclusionCulling no_occlusion;
 
     bool skip_avatar_update = false;
     if (!isAgentAvatarValid() || gAgentCamera.getCameraAnimating() || gAgentCamera.getCameraMode() != CAMERA_MODE_MOUSELOOK || !LLVOAvatar::sVisibleInFirstPerson)

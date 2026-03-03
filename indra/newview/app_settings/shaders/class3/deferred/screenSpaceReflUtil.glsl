@@ -192,9 +192,7 @@ vec3 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
 
         // Advance parametric T (matches Godot exactly):
         // Only advance to depthT for non-facing-camera hits.
-        // For facing-camera hits, descend without advancing — the ray
-        // hasn't reached the surface yet, and advancing at coarse mip
-        // levels would snap the UV to the cell's min-depth location.
+        // For facing-camera hits, descend without advancing.
         if (hit)
         {
             if (!facingCamera)
@@ -343,91 +341,46 @@ float tapScreenSpaceReflection(
         if (result.x < 0.0)
             continue;
 
-        // Post-trace refinement: Hi-Z returns cell-boundary-aligned positions.
-        // At depth edges, the trace can overshoot by up to one Hi-Z cell width.
-        // Walk backward along the ray to find the actual surface crossing, then
-        // binary-refine for sub-pixel precision.
-        {
-            float tHit;
-            if (abs(ssDir.x) >= abs(ssDir.y))
-                tHit = (result.x - ssOrigin.x) / ssDir.x;
-            else
-                tHit = (result.y - ssOrigin.y) / ssDir.y;
-
-            float majorLen = max(abs(ssDir.x), abs(ssDir.y));
-            float pixelStep = 1.0 / (max(screen_res.x, screen_res.y) * majorLen);
-
-            // Walk backward up to 8 pixels to find the nearest above-surface point.
-            // This catches overshoots at depth discontinuities (silhouette edges)
-            // where the Hi-Z trace skips past thin geometry at coarse mip levels.
-            float tAbove = max(0.0, tHit - pixelStep);
-            for (int r = 1; r <= 8; r++)
-            {
-                float tTest = tHit - pixelStep * float(r);
-                if (tTest <= 0.0) break;
-                vec3 testPos = ssOrigin + ssDir * tTest;
-                float surfZ = textureLod(sceneDepth, testPos.xy, 0).r;
-                if (surfZ > testPos.z)
-                {
-                    tAbove = tTest;
-                    break;
-                }
-            }
-
-            // Binary-refine between above-surface and below-surface points.
-            float tLo = tAbove;
-            float tHi = tHit;
-            for (int r = 0; r < 4; r++)
-            {
-                float tMid = (tLo + tHi) * 0.5;
-                vec3 midPos = ssOrigin + ssDir * tMid;
-                float surfZ = textureLod(sceneDepth, midPos.xy, 0).r;
-                if (surfZ > midPos.z)
-                    tLo = tMid;
-                else
-                    tHi = tMid;
-            }
-            result = ssOrigin + ssDir * tHi;
-        }
-
         vec2 hitTC = result.xy;
 
-        float hitDepth = getLinearDepth(hitTC);
+        // Read actual surface depth at the hit pixel (mip 0, exact pixel).
+        ivec2 hitPixel = ivec2(hitTC * screen_res);
+        hitPixel = clamp(hitPixel, ivec2(0), ivec2(screen_res) - 1);
+        float hitSurfaceDepth = texelFetch(sceneDepth, hitPixel, 0).r;
 
-        // Reject sky / far-plane hits
+        // Reject sky / far-plane hits (forward-Z: 1.0 = far).
+        float hitDepth = -getPositionWithDepth(hitTC, hitSurfaceDepth).z;
         if (hitDepth > maxZDepth)
             continue;
 
-        // Continuous thickness validation (AMD FidelityFX ValidateHit approach).
-        // Read surface depth from mip 1 — neighborhood min-depth over a 2×2 block —
-        // matching AMD's FFX_SSSR_LoadDepth(texel_coords / 2, 1). This gives a more
-        // forgiving depth comparison at edges where mip 0 texels straddle a depth
-        // discontinuity, reducing comb/staircase artifacts.
-        ivec2 hitTexel = ivec2(hitTC * screen_res);
-        ivec2 mip1Size = textureSize(sceneDepth, 1);
-        float hitRawDepth = texelFetch(sceneDepth, clamp(hitTexel / 2, ivec2(0), mip1Size - 1), 1).r;
-        vec3 viewSpaceSurface = getPositionWithDepth(hitTC, hitRawDepth).xyz;
+        // Confidence validation:
+        // Compare the trace's final depth with the actual surface depth at that pixel.
+        // Use a dead zone so small mismatches (from cell-boundary snapping) don't
+        // reduce confidence — only penalize when the gap is significant.
+        // No squaring: let the smoothstep gradient be gentle to avoid banding.
+        vec3 viewSpaceSurface = getPositionWithDepth(hitTC, hitSurfaceDepth).xyz;
         vec3 viewSpaceHit = getPositionWithDepth(hitTC, result.z).xyz;
         float hitDistance = length(viewSpaceSurface - viewSpaceHit);
-        float confidence = 1.0 - smoothstep(0.0, MAX_THICKNESS, hitDistance);
-        confidence *= confidence;
+        float confidenceStart = MAX_THICKNESS * 0.25;
+        float confidence = 1.0 - smoothstep(confidenceStart, MAX_THICKNESS, hitDistance);
 
-        if (confidence <= 0.001)
-            continue;
+        // Screen-space ray length in UV units (matches Godot ray_len).
+        // Godot: ray_len = length(screen_ray_dir.xy * t)
+        // Here we approximate with the UV displacement of the hit.
+        float rayLen = length(result.xy - ssOrigin.xy);
 
         float edgeFade = calculateEdgeFade(hitTC);
 
         float zFadeStart = maxZDepth * 0.8;
         float zFade = 1.0 - smoothstep(zFadeStart, maxZDepth, hitDepth);
 
-        float rayLength = length(result - ssOrigin) * maxZDepth;
         float maxMipLevels = floor(log2(max(screen_res.x, screen_res.y)));
-        float distanceFactor = clamp(rayLength / maxZDepth, 0.0, 1.0);
+        float distanceFactor = clamp(rayLen, 0.0, 1.0);
         float effectiveRoughness = clamp(roughness + distanceFactor * roughness, 0.0, 1.0);
         float mipLevel = maxMipLevels * effectiveRoughness;
         vec4 sampledColor = textureLod(source, hitTC, mipLevel);
 
-        float rayFade = 1.0 - smoothstep(maxZDepth * 0.6, maxZDepth, rayLength);
+        float rayFade = 1.0 - smoothstep(0.6, 1.0, rayLen);
         float sampleFade = edgeFade * zFade * rayFade * confidence;
 
         accumColor += sampledColor.rgb;

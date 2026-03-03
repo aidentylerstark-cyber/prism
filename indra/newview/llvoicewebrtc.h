@@ -284,7 +284,7 @@ public:
         static ptr_t matchSessionByChannelID(const std::string& channel_id);
 
         void shutdownAllConnections();
-        void revive();
+        virtual void revive();
 
         static void processSessionStates();
 
@@ -361,9 +361,14 @@ public:
       public:
         parcelSessionState(const std::string& channelID, S32 parcel_local_id);
 
+        void revive() override;
+
         bool isSpatial() override { return true; }
         bool isEstate() override { return false; }
         bool isCallbackPossible() override { return false; }
+
+      private:
+        S32 mParcelLocalID;
     };
 
     class adhocSessionState : public sessionState
@@ -373,6 +378,8 @@ public:
             const std::string& credentials,
             bool notify_on_first_join,
             bool hangup_on_last_leave);
+
+        void revive() override;
 
         bool isSpatial() override { return false; }
         bool isEstate() override { return false; }

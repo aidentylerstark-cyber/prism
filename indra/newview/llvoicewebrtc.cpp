@@ -11,7 +11,7 @@
  * License as published by the Free Software Foundation
  * version 2.1 of the License only.
  *
- * This library is distributed in the hope that it will be useful,
+ * This library is distributed in the hope that it will be useful,VOICE_STATE
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
@@ -2054,6 +2054,26 @@ void LLWebRTCVoiceClient::sessionState::revive()
     mShuttingDown = false;
 }
 
+void LLWebRTCVoiceClient::parcelSessionState::revive()
+{
+    sessionState::revive();
+    LLUUID region_id = gAgent.getRegion()->getRegionID();
+    connectionPtr_t connection = std::make_shared<LLVoiceWebRTCSpatialConnection>(region_id, mParcelLocalID, mChannelID);
+    mWebRTCConnections.push_back(connection);
+    connection->setMuteMic(mMuted);
+    connection->setSpeakerVolume(mSpeakerVolume);
+}
+
+void LLWebRTCVoiceClient::adhocSessionState::revive()
+{
+    sessionState::revive();
+    LLUUID region_id = gAgent.getRegion()->getRegionID();
+    connectionPtr_t connection = std::make_shared<LLVoiceWebRTCAdHocConnection>(region_id, mChannelID, mCredentials);
+    mWebRTCConnections.push_back(connection);
+    connection->setMuteMic(mMuted);
+    connection->setSpeakerVolume(mSpeakerVolume);
+}
+
 //=========================================================================
 // the following are methods to support the coroutine implementation of the
 // voice connection and processing.  They should only be called in the context
@@ -2202,6 +2222,7 @@ LLWebRTCVoiceClient::estateSessionState::estateSessionState()
 }
 
 LLWebRTCVoiceClient::parcelSessionState::parcelSessionState(const std::string &channelID, S32 parcel_local_id)
+    : mParcelLocalID(parcel_local_id)
 {
     mHangupOnLastLeave = false;
     mNotifyOnFirstJoin = false;

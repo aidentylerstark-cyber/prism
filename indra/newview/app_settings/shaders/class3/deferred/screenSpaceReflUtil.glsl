@@ -46,19 +46,11 @@ uniform float glossySampleCount;
 uniform float noiseSine;
 uniform float maxZDepth;
 uniform float maxRoughness;
+uniform vec2 ssrJitterOffset;
+uniform int hizMipCount;
 
-// Ray march parameters wired to uniforms (.x component of each)
-//   rayStep.x              = step size (default 0.5)
-//   iterationCount.x       = max steps (default 96)
-//   adaptiveStepMultiplier.x = step growth rate (default 1.03)
-//   distanceBias.x         = max step size cap (default 5.0)
-//   depthRejectBias.x      = max thickness for hit validation (default 1.0)
-#define STEP_SIZE       rayStep.x
-#define STEP_GROWTH     adaptiveStepMultiplier.x
-#define MAX_STEP_SIZE   distanceBias.x
 #define MAX_THICKNESS   depthRejectBias.x
 #define DEPTH_BIAS      depthRejectBias.y
-const int   BINARY_STEPS    = 8;
 
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 
@@ -71,86 +63,160 @@ vec2 generateProjectedPosition(vec3 pos)
 {
     vec4 samplePosition = projection_matrix * vec4(pos, 1.0);
     samplePosition.xy = (samplePosition.xy / samplePosition.w) * 0.5 + 0.5;
+    // Compensate for SMAA T2x jitter difference between current and previous frame.
+    // mSceneMap was rendered with the previous frame's jittered projection;
+    // offset the UV so depth/color lookups hit the correct texels.
+    samplePosition.xy += ssrJitterOffset;
     return samplePosition.xy;
 }
 
 float getLinearDepth(vec2 tc)
 {
-    float depth = texture(sceneDepth, tc).r;
+    // Force LOD 0 — sceneDepth now carries the Hi-Z mip chain,
+    // and reflected UVs have chaotic derivatives that could cause
+    // auto-LOD selection to sample coarse Hi-Z levels.
+    float depth = textureLod(sceneDepth, tc, 0).r;
     vec4 pos = getPositionWithDepth(tc, depth);
     return -pos.z;
 }
 
-vec3 binarySearch(vec3 dir, inout vec3 hitCoord, inout float dDepth)
+float projectDepth(vec3 viewPos)
 {
-    float depth;
-    float initialStepLen = length(dir);
-
-    for (int i = 0; i < BINARY_STEPS; i++)
-    {
-        vec2 projectedCoord = generateProjectedPosition(hitCoord);
-        depth = getLinearDepth(projectedCoord);
-        dDepth = abs(hitCoord.z) - depth;
-
-        dir *= 0.5;
-        if (dDepth > 0.0)
-            hitCoord -= dir;
-        else
-            hitCoord += dir;
-    }
-
-    vec2 projectedCoord = generateProjectedPosition(hitCoord);
-
-    // After 8 binary steps, precision is initialStep / 256.
-    // Scale acceptance with depth — precision degrades at distance.
-    float depthScale = max(1.0, depth * 0.01);
-    float maxError = max(initialStepLen * 0.1, 0.05) * depthScale;
-    if (abs(dDepth) > maxError)
-        return vec3(-1.0, -1.0, depth);
-
-    return vec3(projectedCoord, depth);
+    vec4 clip = projection_matrix * vec4(viewPos, 1.0);
+    return (clip.z / clip.w) * 0.5 + 0.5;
 }
 
-vec3 rayMarch(vec3 dir, inout vec3 hitCoord, out float dDepth, float startDepth)
+// Hi-Z hierarchical screen-space ray trace (Godot parametric-T approach).
+// origin/dir are in UV+depth space: (u, v, rawDepth) where depth is [0,1].
+// Returns hit position (uv + raw depth) or vec3(-1) on miss.
+//
+// Uses parametric T along the ray for all comparisons, avoiding the AMD
+// absolute-depth comparison that breaks for camera-facing rays (dir.z < 0).
+// Z is normalized so dir.z = ±1, making depth_t = (cellDepth - origin.z) / dir.z
+// trivially comparable with the edge_t from cell boundary intersections.
+//
+// Our Hi-Z stores MIN depth (standard GL: 0=near, 1=far), so min = closest.
+// Godot uses reversed-Z with MAX depth, but the logic maps cleanly:
+//   Godot: max(a,b,c,d) with reversed-Z → closest surface
+//   Ours:  min(a,b,c,d) with standard-Z → closest surface
+// The comparison flips accordingly.
+//
+// References:
+//   Godot Engine SSR: screen_space_reflection.glsl (MIT license)
+//   Sugulee/GPU Pro 5: Hi-Z Screen-Space Cone-Traced Reflections
+vec3 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
 {
-    dir *= STEP_SIZE;
+    int maxLevel = hizMipCount - 1;
 
-    for (int i = 0; i < int(iterationCount.x); i++)
+    // Guard near-zero Z direction — treat as Z+ epsilon.
+    if (abs(dir.z) < 1e-7)
+        dir.z = 1e-7;
+
+    // Normalize direction so |dir.z| = 1.
+    // This makes depth_t = (cellDepth - origin.z) * zDir directly comparable
+    // with edge_t values along the XY axes.
+    // Reference: https://hacksoflife.blogspot.com/2020/10/a-tip-for-hiz-ssr-parametric-t-tracing.html
+    vec3 rayDir = dir / abs(dir.z);
+
+    // Standard GL: 0=near, 1=far. Camera-facing rays move toward 0 (dir.z < 0).
+    // Godot (reversed-Z): facing_camera = rayDir.z >= 0 (toward near=1.0).
+    // For standard GL: facing_camera = dir.z < 0 (toward near=0.0).
+    bool facingCamera = dir.z < 0.0;
+    float zDir = rayDir.z;  // ±1 after normalization
+
+    // Cell step direction: +1 or -1 per axis (matches Godot cell_step).
+    vec2 cellStep = vec2(rayDir.x < 0.0 ? -1.0 : 1.0,
+                         rayDir.y < 0.0 ? -1.0 : 1.0);
+
+    int curLevel = 0;
+    float t = 0.0;
+
+    // Compute t_max: parametric T to the screen edge where we stop tracing.
+    vec2 t0 = (vec2(0.0) - origin.xy) / rayDir.xy;
+    vec2 t1 = (vec2(1.0) - origin.xy) / rayDir.xy;
+    vec2 t2 = max(t0, t1);
+    float tMax = min(t2.x, t2.y);
+
+    // Initial advance: push past origin cell to avoid self-intersection.
+    // Matches Godot's initial advance exactly.
     {
-        hitCoord += dir;
-
-        vec2 projectedCoord = generateProjectedPosition(hitCoord);
-
-        if (projectedCoord.x < 0.0 || projectedCoord.x > 1.0 ||
-            projectedCoord.y < 0.0 || projectedCoord.y > 1.0)
-            return vec3(-1.0);
-
-        float depth = getLinearDepth(projectedCoord);
-        dDepth = abs(hitCoord.z) - depth;
-
-        if (i < 1)
-            continue;
-
-        if (depth > maxZDepth)
-            return vec3(-1.0);
-
-        if (dDepth > 0.0)
-        {
-            float stepLen = length(dir);
-            float thickness = max(MAX_THICKNESS, stepLen * 1.5);
-            if (dDepth > thickness)
-            {
-                dir = normalize(dir) * min(stepLen * STEP_GROWTH, MAX_STEP_SIZE);
-                continue;
-            }
-            return binarySearch(dir, hitCoord, dDepth);
-        }
-
-        // Grow step but cap at max to avoid skipping geometry
-        dir = normalize(dir) * min(length(dir) * STEP_GROWTH, MAX_STEP_SIZE);
+        vec2 cellIndex = floor(origin.xy * screen_res);
+        vec2 newCellIndex = cellIndex + clamp(cellStep, vec2(0.0), vec2(1.0));
+        vec2 newCellPos = (newCellIndex / screen_res) + cellStep * 0.000001;
+        vec2 posT = (newCellPos - origin.xy) / rayDir.xy;
+        t = min(posT.x, posT.y);
     }
 
-    return vec3(-1.0);
+    for (int i = 0; i < maxIterations && curLevel >= 0 && t < tMax; i++)
+    {
+        vec3 pos = origin + rayDir * t;
+
+        // Cell lookup at current mip level.
+        vec2 cellCount = vec2(max(1, int(screen_res.x) >> curLevel),
+                              max(1, int(screen_res.y) >> curLevel));
+        ivec2 cellIndex = ivec2(floor(pos.xy * cellCount));
+        cellIndex = clamp(cellIndex, ivec2(0), ivec2(cellCount) - 1);
+
+        // Min depth in this cell (closest surface, standard GL).
+        float cellDepth = texelFetch(sceneDepth, cellIndex, curLevel).r;
+
+        // Parametric T to the depth surface.
+        // Since rayDir.z = ±1, this is (cellDepth - origin.z) * (±1).
+        float depthT = (cellDepth - origin.z) * zDir;
+
+        // Parametric T to the nearest cell boundary in XY.
+        vec2 newCellIndex = vec2(cellIndex) + clamp(cellStep, vec2(0.0), vec2(1.0));
+        vec2 newCellPos = (newCellIndex / cellCount) + cellStep * 0.000001;
+        vec2 posT = (newCellPos - origin.xy) / rayDir.xy;
+        float edgeT = min(posT.x, posT.y);
+
+        // Hit detection (matches Godot exactly):
+        // Forward rays: hit if depth surface is reached before cell boundary.
+        // Camera-facing rays: hit if ray hasn't traveled past the depth surface.
+        bool hit = facingCamera ? (t <= depthT) : (depthT <= edgeT);
+
+        int mipOffset = hit ? -1 : 1;
+
+        // Thickness gate at mip 0 (matches Godot depth_tolerance check):
+        // Linearize depths and reject if surface is too far behind ray.
+        if (curLevel == 0 && hit)
+        {
+            float z0 = getPositionWithDepth(pos.xy, cellDepth).z;
+            float z1 = getPositionWithDepth(pos.xy, pos.z).z;
+            if ((z0 - z1) > MAX_THICKNESS)
+            {
+                hit = false;
+                mipOffset = 0;  // Stay at mip 0, march cell-by-cell.
+            }
+        }
+
+        // Advance parametric T (matches Godot exactly):
+        // Only advance to depthT for non-facing-camera hits.
+        // For facing-camera hits, descend without advancing — the ray
+        // hasn't reached the surface yet, and advancing at coarse mip
+        // levels would snap the UV to the cell's min-depth location.
+        if (hit)
+        {
+            if (!facingCamera)
+                t = max(t, depthT);
+        }
+        else
+        {
+            t = edgeT;
+        }
+
+        curLevel = min(curLevel + mipOffset, maxLevel);
+    }
+
+    vec3 hitPos = origin + rayDir * t;
+
+    // Final bounds check.
+    if (hitPos.x < 0.0 || hitPos.x > 1.0 ||
+        hitPos.y < 0.0 || hitPos.y > 1.0 ||
+        t >= tMax)
+        return vec3(-1.0);
+
+    return hitPos;
 }
 
 float calculateEdgeFade(vec2 screenPos)
@@ -256,31 +322,105 @@ float tapScreenSpaceReflection(
         // Push ray origin along surface normal to prevent self-intersection.
         // Deterministic (not random) to avoid per-pixel noise.
         // Scales with distance to match depth-buffer precision degradation.
-        float clearance = max(STEP_SIZE * 2.0, -viewPos.z * 0.002);
+        float clearance = max(0.05, -viewPos.z * 0.002);
         vec3 clearedPos = biasedPos + normal * clearance;
         vec3 transformedClearedPos = (inv_modelview_delta * vec4(clearedPos, 1.0)).xyz;
-        vec3 hitCoord = transformedClearedPos;
-        float dDepth;
 
-        // Sub-step dither: offset start along ray by a fraction of one step.
-        // Breaks step-boundary striations without shifting the ray origin.
-        float dither = random(tc * screen_res + float(s) * 0.789);
-        hitCoord += transformedReflDir * STEP_SIZE * dither;
+        // Project ray origin and a nearby point to screen space (UV + raw depth).
+        // Use a short step (fraction of distance-to-camera) to ensure the end
+        // point stays in front of the camera — projecting at maxZDepth can wrap
+        // behind the camera for reflections going toward the viewer.
+        vec3 ssOrigin = vec3(generateProjectedPosition(transformedClearedPos),
+                             projectDepth(transformedClearedPos));
+        float stepDist = max(0.1, -transformedClearedPos.z * 0.1);
+        vec3 transformedEnd = transformedClearedPos + transformedReflDir * stepDist;
+        vec3 ssFar = vec3(generateProjectedPosition(transformedEnd),
+                          projectDepth(transformedEnd));
+        vec3 ssDir = normalize(ssFar - ssOrigin);
 
-        vec3 result = rayMarch(transformedReflDir, hitCoord, dDepth, startDepth);
+        vec3 result = hiZTrace(ssOrigin, ssDir, int(iterationCount.x));
 
         if (result.x < 0.0)
             continue;
 
+        // Post-trace refinement: Hi-Z returns cell-boundary-aligned positions.
+        // At depth edges, the trace can overshoot by up to one Hi-Z cell width.
+        // Walk backward along the ray to find the actual surface crossing, then
+        // binary-refine for sub-pixel precision.
+        {
+            float tHit;
+            if (abs(ssDir.x) >= abs(ssDir.y))
+                tHit = (result.x - ssOrigin.x) / ssDir.x;
+            else
+                tHit = (result.y - ssOrigin.y) / ssDir.y;
+
+            float majorLen = max(abs(ssDir.x), abs(ssDir.y));
+            float pixelStep = 1.0 / (max(screen_res.x, screen_res.y) * majorLen);
+
+            // Walk backward up to 8 pixels to find the nearest above-surface point.
+            // This catches overshoots at depth discontinuities (silhouette edges)
+            // where the Hi-Z trace skips past thin geometry at coarse mip levels.
+            float tAbove = max(0.0, tHit - pixelStep);
+            for (int r = 1; r <= 8; r++)
+            {
+                float tTest = tHit - pixelStep * float(r);
+                if (tTest <= 0.0) break;
+                vec3 testPos = ssOrigin + ssDir * tTest;
+                float surfZ = textureLod(sceneDepth, testPos.xy, 0).r;
+                if (surfZ > testPos.z)
+                {
+                    tAbove = tTest;
+                    break;
+                }
+            }
+
+            // Binary-refine between above-surface and below-surface points.
+            float tLo = tAbove;
+            float tHi = tHit;
+            for (int r = 0; r < 4; r++)
+            {
+                float tMid = (tLo + tHi) * 0.5;
+                vec3 midPos = ssOrigin + ssDir * tMid;
+                float surfZ = textureLod(sceneDepth, midPos.xy, 0).r;
+                if (surfZ > midPos.z)
+                    tLo = tMid;
+                else
+                    tHi = tMid;
+            }
+            result = ssOrigin + ssDir * tHi;
+        }
+
         vec2 hitTC = result.xy;
-        float hitDepth = result.z;
+
+        float hitDepth = getLinearDepth(hitTC);
+
+        // Reject sky / far-plane hits
+        if (hitDepth > maxZDepth)
+            continue;
+
+        // Continuous thickness validation (AMD FidelityFX ValidateHit approach).
+        // Read surface depth from mip 1 — neighborhood min-depth over a 2×2 block —
+        // matching AMD's FFX_SSSR_LoadDepth(texel_coords / 2, 1). This gives a more
+        // forgiving depth comparison at edges where mip 0 texels straddle a depth
+        // discontinuity, reducing comb/staircase artifacts.
+        ivec2 hitTexel = ivec2(hitTC * screen_res);
+        ivec2 mip1Size = textureSize(sceneDepth, 1);
+        float hitRawDepth = texelFetch(sceneDepth, clamp(hitTexel / 2, ivec2(0), mip1Size - 1), 1).r;
+        vec3 viewSpaceSurface = getPositionWithDepth(hitTC, hitRawDepth).xyz;
+        vec3 viewSpaceHit = getPositionWithDepth(hitTC, result.z).xyz;
+        float hitDistance = length(viewSpaceSurface - viewSpaceHit);
+        float confidence = 1.0 - smoothstep(0.0, MAX_THICKNESS, hitDistance);
+        confidence *= confidence;
+
+        if (confidence <= 0.001)
+            continue;
 
         float edgeFade = calculateEdgeFade(hitTC);
 
         float zFadeStart = maxZDepth * 0.8;
         float zFade = 1.0 - smoothstep(zFadeStart, maxZDepth, hitDepth);
 
-        float rayLength = length(hitCoord - transformedClearedPos);
+        float rayLength = length(result - ssOrigin) * maxZDepth;
         float maxMipLevels = floor(log2(max(screen_res.x, screen_res.y)));
         float distanceFactor = clamp(rayLength / maxZDepth, 0.0, 1.0);
         float effectiveRoughness = clamp(roughness + distanceFactor * roughness, 0.0, 1.0);
@@ -288,7 +428,7 @@ float tapScreenSpaceReflection(
         vec4 sampledColor = textureLod(source, hitTC, mipLevel);
 
         float rayFade = 1.0 - smoothstep(maxZDepth * 0.6, maxZDepth, rayLength);
-        float sampleFade = edgeFade * zFade * rayFade;
+        float sampleFade = edgeFade * zFade * rayFade * confidence;
 
         accumColor += sampledColor.rgb;
         accumFade += sampleFade;

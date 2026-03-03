@@ -148,6 +148,14 @@ public:
     U32 getNumTextures() const;
 
     U32 getDepth(void) const { return mDepth; }
+    U32 getMipLevels() const { return mMipLevels; }
+
+    // Rebind FBO depth attachment at a specific mip level and set viewport.
+    // Used for Hi-Z pyramid generation. Caller must call resetDepthMipLevel() when done.
+    void bindDepthMipLevel(S32 level);
+
+    // Restore FBO depth attachment to mip level 0 and full viewport.
+    void resetDepthMipLevel();
 
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
 

@@ -99,6 +99,7 @@ LLGLSLShader    gBenchmarkProgram;
 LLGLSLShader    gReflectionProbeDisplayProgram;
 LLGLSLShader    gCopyProgram;
 LLGLSLShader    gCopyDepthProgram;
+LLGLSLShader    gHiZReduceProgram;
 LLGLSLShader    gPBRTerrainBakeProgram;
 LLGLSLShader    gDrawColorProgram;
 
@@ -3628,6 +3629,16 @@ bool LLViewerShaderMgr::loadShadersInterface()
         gCopyDepthProgram.addPermutation("COPY_DEPTH", "1");
         gCopyDepthProgram.mShaderLevel = mShaderLevel[SHADER_INTERFACE];
         success = gCopyDepthProgram.createShader();
+    }
+
+    if (success)
+    {
+        gHiZReduceProgram.mName = "Hi-Z Reduce Shader";
+        gHiZReduceProgram.mShaderFiles.clear();
+        gHiZReduceProgram.mShaderFiles.push_back(make_pair("interface/copyV.glsl", GL_VERTEX_SHADER));
+        gHiZReduceProgram.mShaderFiles.push_back(make_pair("deferred/hiZReduceF.glsl", GL_FRAGMENT_SHADER));
+        gHiZReduceProgram.mShaderLevel = mShaderLevel[SHADER_INTERFACE];
+        success = gHiZReduceProgram.createShader();
     }
 
     if (success)

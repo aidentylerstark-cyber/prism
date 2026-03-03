@@ -292,6 +292,7 @@ static LLStaticHashedString sTraceRayStep("trayStep");
 static LLStaticHashedString sTraceDistanceBias("distanceBias");
 static LLStaticHashedString sTraceDepthRejectBias("depthRejectBias");
 static LLStaticHashedString sTraceStepMultiplier("adaptiveStepMultiplier");
+static LLStaticHashedString sSSRJitterOffset("ssrJitterOffset");
 static LLStaticHashedString sTraceSplitParamsStart("splitParamsStart");
 static LLStaticHashedString sTraceSplitParamsEnd("splitParamsEnd");
 
@@ -7400,12 +7401,53 @@ void LLPipeline::copyScreenSpaceReflections(LLRenderTarget* src, LLRenderTarget*
 
         gGL.getTexUnit(diff_map)->bind(src);
         gGL.getTexUnit(depth_map)->bind(&depth_src, true);
+        gGL.getTexUnit(depth_map)->setTextureFilteringOption(LLTexUnit::TFO_POINT);
 
         mScreenTriangleVB->setBuffer();
         mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
         dst->flush();
     }
+}
+
+void LLPipeline::buildHiZBuffer()
+{
+    if (!RenderScreenSpaceReflections || gCubeSnapshot) return;
+
+    LL_PROFILE_GPU_ZONE("build Hi-Z");
+
+    S32 mipLevels = mSceneMap.getMipLevels();
+    if (mipLevels <= 1) return;
+
+    LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+
+    gHiZReduceProgram.bind();
+
+    static LLStaticHashedString sHiZSrcLevel("srcLevel");
+
+    // Bind mSceneMap's own depth as the read source
+    gHiZReduceProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH, &mSceneMap, true, LLTexUnit::TFO_POINT);
+
+    for (S32 level = 1; level < mipLevels; level++)
+    {
+        // Restrict readable mip range to [0, level-1] to avoid feedback
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, level - 1);
+
+        gHiZReduceProgram.uniform1i(sHiZSrcLevel, level - 1);
+
+        mSceneMap.bindDepthMipLevel(level);
+
+        mScreenTriangleVB->setBuffer();
+        mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    // Restore full mip range and mip 0 binding
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mipLevels - 1);
+    mSceneMap.resetDepthMipLevel();
+
+    gHiZReduceProgram.unbind();
 }
 
 void LLPipeline::generateGlow(LLRenderTarget* src)
@@ -9584,11 +9626,39 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
         shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_Z, traceMaxDepth());
         shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_ROUGHNESS, traceMaxRoughness());
 
+        // Compute jitter compensation for SMAA T2x.
+        // mSceneMap was rendered with the previous frame's jittered projection.
+        // SSR projects positions using the current frame's projection.
+        // Correct the UV offset so mSceneMap lookups hit the right texels.
+        float jitterOffsetX = 0.f;
+        float jitterOffsetY = 0.f;
+        if (sT2xJitterEnabled)
+        {
+            static const float jitters[2][2] = {
+                { 0.25f, -0.25f },
+                {-0.25f,  0.25f },
+            };
+            U32 curIdx  = mSMAAFrameIndex & 1;
+            U32 prevIdx = curIdx ^ 1;
+            float width  = (float)gViewerWindow->getWorldViewWidthRaw();
+            float height = (float)gViewerWindow->getWorldViewHeightRaw();
+            // Jitter is applied to proj[2][0/1] as j * 2 / dim.
+            // NDC offset from jitter = -j_ndc (perspective divide flips sign).
+            // UV = NDC * 0.5 + 0.5, so UV delta = NDC delta * 0.5.
+            // Correction = (cur_j - prev_j) / dim  (the 2 and 0.5 cancel).
+            jitterOffsetX = (jitters[curIdx][0] - jitters[prevIdx][0]) / width;
+            jitterOffsetY = (jitters[curIdx][1] - jitters[prevIdx][1]) / height;
+        }
+        shader.uniform2f(sSSRJitterOffset, jitterOffsetX, jitterOffsetY);
+
         channel = shader.enableTexture(LLShaderMgr::SCENE_DEPTH);
         if (channel > -1)
         {
             gGL.getTexUnit(channel)->bind(&mSceneMap, true);
         }
+
+        static LLStaticHashedString sHiZMipCount("hizMipCount");
+        shader.uniform1i(sHiZMipCount, (GLint)mSceneMap.getMipLevels());
     }
 }
 

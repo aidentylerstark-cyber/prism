@@ -332,7 +332,7 @@ float tapScreenSpaceReflection(
         vec3 transformedEnd = transformedClearedPos + transformedReflDir * stepDist;
         vec3 ssFar = vec3(generateProjectedPosition(transformedEnd),
                           projectDepth(transformedEnd));
-        vec3 ssDir = normalize(ssFar - ssOrigin);
+        vec3 ssDir = ssFar - ssOrigin;
 
         vec4 result = hiZTrace(ssOrigin, ssDir, int(iterationCount.x));
 
@@ -361,10 +361,26 @@ float tapScreenSpaceReflection(
         float confidence = 1.0 - smoothstep(0.0, MAX_THICKNESS, hitDistance);
         confidence *= confidence;
 
-        // Screen-space ray length in UV units (matches Godot ray_len).
-        // Godot: ray_len = length(screen_ray_dir.xy * t)
-        // Here we approximate with the UV displacement of the hit.
+        // Short-ray back-face check (Godot-style):
+        // For rays that traveled < 3 pixels, compute a geometric normal at the
+        // hit point from depth buffer cross-derivatives. Reject if the reflected
+        // ray exits the surface (dot >= 0), which indicates self-intersection.
         float rayLen = length(result.xy - ssOrigin.xy);
+        float rayPixelLen = rayLen * max(screen_res.x, screen_res.y);
+        if (rayPixelLen < 3.0)
+        {
+            float dR = texelFetch(sceneDepth, hitPixel + ivec2(1, 0), 0).r;
+            float dD = texelFetch(sceneDepth, hitPixel + ivec2(0, 1), 0).r;
+            vec3 posR = getPositionWithDepth((vec2(hitPixel) + vec2(1.5, 0.5)) / screen_res, dR).xyz;
+            vec3 posD = getPositionWithDepth((vec2(hitPixel) + vec2(0.5, 1.5)) / screen_res, dD).xyz;
+            vec3 hitGeomNormal = cross(posR - viewSpaceSurface, posD - viewSpaceSurface);
+            // Ensure normal faces toward camera (positive Z in view space).
+            if (hitGeomNormal.z < 0.0) hitGeomNormal = -hitGeomNormal;
+            hitGeomNormal = normalize(hitGeomNormal);
+
+            if (dot(reflectDir, hitGeomNormal) >= 0.0)
+                continue;
+        }
 
         float edgeFade = calculateEdgeFade(hitTC);
 

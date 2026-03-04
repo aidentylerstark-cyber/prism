@@ -104,7 +104,10 @@ float projectDepth(vec3 viewPos)
 // References:
 //   Godot Engine SSR: screen_space_reflection.glsl (MIT license)
 //   Sugulee/GPU Pro 5: Hi-Z Screen-Space Cone-Traced Reflections
-vec3 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
+// Returns vec4: xyz = hit position (UV + raw depth), w = 1.0 on hit.
+// Returns vec4(-1) on miss (ray exits screen or runs out of iterations).
+// Thickness-rejected surfaces are skipped (mip-0 march) but don't kill the trace.
+vec4 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
 {
     int maxLevel = hizMipCount - 1;
 
@@ -212,9 +215,9 @@ vec3 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
     if (hitPos.x < 0.0 || hitPos.x > 1.0 ||
         hitPos.y < 0.0 || hitPos.y > 1.0 ||
         t >= tMax)
-        return vec3(-1.0);
+        return vec4(-1.0);
 
-    return hitPos;
+    return vec4(hitPos, 1.0);
 }
 
 float calculateEdgeFade(vec2 screenPos)
@@ -233,11 +236,6 @@ float tapScreenSpaceReflection(
     sampler2D source,
     float glossiness)
 {
-#ifdef TRANSPARENT_SURFACE
-    collectedColor = vec4(1, 0, 1, 1);
-    return 0;
-#endif
-
     float roughness = 1.0 - glossiness;
 
     if (roughness >= maxRoughness)
@@ -336,7 +334,7 @@ float tapScreenSpaceReflection(
                           projectDepth(transformedEnd));
         vec3 ssDir = normalize(ssFar - ssOrigin);
 
-        vec3 result = hiZTrace(ssOrigin, ssDir, int(iterationCount.x));
+        vec4 result = hiZTrace(ssOrigin, ssDir, int(iterationCount.x));
 
         if (result.x < 0.0)
             continue;
@@ -353,16 +351,15 @@ float tapScreenSpaceReflection(
         if (hitDepth > maxZDepth)
             continue;
 
-        // Confidence validation:
+        // Confidence validation (matches Godot):
         // Compare the trace's final depth with the actual surface depth at that pixel.
-        // Use a dead zone so small mismatches (from cell-boundary snapping) don't
-        // reduce confidence — only penalize when the gap is significant.
-        // No squaring: let the smoothstep gradient be gentle to avoid banding.
+        // No dead zone — smoothstep from 0 penalizes any mismatch.
+        // Squared for strong near-hits with rapid falloff.
         vec3 viewSpaceSurface = getPositionWithDepth(hitTC, hitSurfaceDepth).xyz;
         vec3 viewSpaceHit = getPositionWithDepth(hitTC, result.z).xyz;
         float hitDistance = length(viewSpaceSurface - viewSpaceHit);
-        float confidenceStart = MAX_THICKNESS * 0.25;
-        float confidence = 1.0 - smoothstep(confidenceStart, MAX_THICKNESS, hitDistance);
+        float confidence = 1.0 - smoothstep(0.0, MAX_THICKNESS, hitDistance);
+        confidence *= confidence;
 
         // Screen-space ray length in UV units (matches Godot ray_len).
         // Godot: ray_len = length(screen_ray_dir.xy * t)
@@ -380,8 +377,10 @@ float tapScreenSpaceReflection(
         float mipLevel = maxMipLevels * effectiveRoughness;
         vec4 sampledColor = textureLod(source, hitTC, mipLevel);
 
+        // Fade-in: suppress near-origin artifacts from self-intersection.
+        float fadeIn = smoothstep(0.0, 0.01, rayLen);
         float rayFade = 1.0 - smoothstep(0.6, 1.0, rayLen);
-        float sampleFade = edgeFade * zFade * rayFade * confidence;
+        float sampleFade = edgeFade * zFade * fadeIn * rayFade * confidence;
 
         accumColor += sampledColor.rgb;
         accumFade += sampleFade;

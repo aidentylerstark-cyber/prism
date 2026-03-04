@@ -25,14 +25,11 @@
 
 #define FLT_MAX 3.402823466e+38
 
-#if defined(SSR)
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
-#endif
-
 uniform samplerCubeArray   reflectionProbes;
 uniform samplerCubeArray   irradianceProbes;
 
 uniform sampler2D sceneMap;
+uniform vec2 screen_res;
 uniform int cube_snapshot;
 uniform float max_probe_lod;
 
@@ -803,17 +800,10 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = vec4(0);
-        if (transparent)
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, 1);
-            ssr.a *= glossiness;
-        }
-        else
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, glossiness);
-        }
+        vec4 ssr = texture(sceneMap, tc);
 
+        if (transparent)
+            ssr.a *= glossiness;
 
         glossenv = mix(glossenv, ssr.rgb, ssr.a);
     }
@@ -918,17 +908,10 @@ void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout 
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = vec4(0);
+        vec4 ssr = texture(sceneMap, tc);
 
         if (transparent)
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, 1);
             ssr.a *= glossiness;
-        }
-        else
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, glossiness);
-        }
 
         glossenv = mix(glossenv, ssr.rgb, ssr.a);
         legacyenv = mix(legacyenv, ssr.rgb, ssr.a);

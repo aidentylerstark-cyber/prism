@@ -7855,6 +7855,28 @@
     <key>Value</key>
     <real>1</real>
   </map>
+  <key>RenderScreenSpaceReflectionsFilterScale</key>
+  <map>
+    <key>Comment</key>
+    <string>Blur size for the SSR spatial filter (0.0 to disable, default 2.0).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>2.0</real>
+  </map>
+  <key>RenderScreenSpaceReflectionsResolutionMultiplier</key>
+  <map>
+    <key>Comment</key>
+    <string>Resolution multiplier for the SSR buffer (0.25 to 1.0).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
   <key>RenderBumpmapMinDistanceSquared</key>
     <map>
       <key>Comment</key>

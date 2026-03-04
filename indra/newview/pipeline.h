@@ -154,6 +154,10 @@ public:
     void renderFinalize();
     void copyScreenSpaceReflections(LLRenderTarget* src, LLRenderTarget* dst);
     void buildHiZBuffer();
+    void renderSSRTrace();
+    void renderSSRAlpha();
+    void renderSSRWater();
+    void filterSSRBuffer();
     void generateLuminance(LLRenderTarget* src, LLRenderTarget* dst);
     void generateExposure(LLRenderTarget* src, LLRenderTarget* dst, bool use_history = true);
     void tonemap(LLRenderTarget* src, LLRenderTarget* dst, bool gamma_correct);
@@ -730,6 +734,10 @@ public:
     // copy of the color/depth buffer just before gamma correction
     // for use by SSR
     LLRenderTarget          mSceneMap;
+
+    // Pre-computed SSR: RGB=reflection, A=fade
+    LLRenderTarget          mSSRBuffer;
+    LLRenderTarget          mSSRFilterTemp;  // Ping-pong target for SSR filter
 
     // exposure map for getting average color in scene
     LLRenderTarget          mLuminanceMap;

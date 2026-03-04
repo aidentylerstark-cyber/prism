@@ -116,6 +116,11 @@ public:
     //share depth buffer with provided render target
     void shareDepthBuffer(LLRenderTarget& target);
 
+    //blit depth from source render target into this target's depth buffer
+    //supports different resolutions (nearest-filter downsample/upsample)
+    //this target must have its own depth buffer allocated
+    void blitDepthFrom(LLRenderTarget& source);
+
     //free any allocated resources
     //safe to call redundantly
     // asserts that this target is not currently bound or present in the RT stack

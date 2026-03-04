@@ -136,6 +136,10 @@ LLGLSLShader        gImpostorProgram;
 LLGLSLShader            gGlowProgram;
 LLGLSLShader            gGlowExtractProgram;
 LLGLSLShader            gPostScreenSpaceReflectionProgram;
+LLGLSLShader            gScreenSpaceReflTraceProgram;
+LLGLSLShader            gSSRAlphaProgram;
+LLGLSLShader            gSkinnedSSRAlphaProgram;
+LLGLSLShader            gSSRWaterProgram;
 
 // Deferred rendering shaders
 LLGLSLShader            gDeferredImpostorProgram;
@@ -162,6 +166,7 @@ LLGLSLShader            gDeferredSunProbeProgram;
 LLGLSLShader            gHazeProgram;
 LLGLSLShader            gHazeWaterProgram;
 LLGLSLShader            gDeferredBlurLightProgram;
+LLGLSLShader            gSSRFilterProgram;
 LLGLSLShader            gDeferredSoftenProgram;
 LLGLSLShader            gDeferredSoftenCubeProgram;
 LLGLSLShader            gDeferredShadowProgram;
@@ -1115,6 +1120,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gDeferredMultiSpotLightProgram.unload();
         gDeferredSunProgram.unload();
         gDeferredBlurLightProgram.unload();
+        gSSRFilterProgram.unload();
         gDeferredSoftenProgram.unload();
         gDeferredSoftenCubeProgram.unload();
         gDeferredShadowProgram.unload();
@@ -1779,6 +1785,19 @@ bool LLViewerShaderMgr::loadShadersDeferred()
 
         success = gDeferredBlurLightProgram.createShader();
         llassert(success);
+    }
+
+    if (success)
+    {
+        gSSRFilterProgram.mName = "SSR Filter Shader";
+        gSSRFilterProgram.mFeatures.isDeferred = true;
+        gSSRFilterProgram.mFeatures.hasFullGBuffer = true;
+        gSSRFilterProgram.mShaderFiles.clear();
+        gSSRFilterProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSRFilterProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflFilterF.glsl", GL_FRAGMENT_SHADER));
+        gSSRFilterProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        add_common_permutations(&gSSRFilterProgram);
+        success = gSSRFilterProgram.createShader();
     }
 
     if (success)
@@ -3140,8 +3159,52 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gPostScreenSpaceReflectionProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflPostF.glsl", GL_FRAGMENT_SHADER));
         gPostScreenSpaceReflectionProgram.mFeatures.hasScreenSpaceReflections = true;
         gPostScreenSpaceReflectionProgram.mFeatures.isDeferred                = true;
+        gPostScreenSpaceReflectionProgram.mFeatures.hasFullGBuffer            = true;
         gPostScreenSpaceReflectionProgram.mShaderLevel = 3;
         success = gPostScreenSpaceReflectionProgram.createShader();
+    }
+
+    if (success) {
+        gScreenSpaceReflTraceProgram.mName = "Screen Space Reflection Trace";
+        gScreenSpaceReflTraceProgram.mShaderFiles.clear();
+        gScreenSpaceReflTraceProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflPostV.glsl", GL_VERTEX_SHADER));
+        gScreenSpaceReflTraceProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflTraceF.glsl", GL_FRAGMENT_SHADER));
+        gScreenSpaceReflTraceProgram.mFeatures.hasScreenSpaceReflections = true;
+        gScreenSpaceReflTraceProgram.mFeatures.isDeferred                = true;
+        gScreenSpaceReflTraceProgram.mFeatures.hasFullGBuffer            = true;
+        gScreenSpaceReflTraceProgram.mShaderLevel = 3;
+        success = gScreenSpaceReflTraceProgram.createShader();
+    }
+
+    if (success) {
+        gSSRAlphaProgram.mName = "SSR Alpha";
+        gSSRAlphaProgram.mShaderFiles.clear();
+        gSSRAlphaProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflAlphaV.glsl", GL_VERTEX_SHADER));
+        gSSRAlphaProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflAlphaF.glsl", GL_FRAGMENT_SHADER));
+        gSSRAlphaProgram.mFeatures.hasScreenSpaceReflections = true;
+        gSSRAlphaProgram.mFeatures.isDeferred                = true;
+        gSSRAlphaProgram.mShaderLevel = 3;
+        success = gSSRAlphaProgram.createShader();
+    }
+
+    if (success)
+    {
+        success = make_rigged_variant(gSSRAlphaProgram, gSkinnedSSRAlphaProgram);
+    }
+
+    if (success)
+    {
+        gSSRWaterProgram.mName = "SSR Water";
+        gSSRWaterProgram.mShaderFiles.clear();
+        gSSRWaterProgram.mShaderFiles.push_back(make_pair("environment/waterV.glsl", GL_VERTEX_SHADER));
+        gSSRWaterProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflWaterF.glsl", GL_FRAGMENT_SHADER));
+        gSSRWaterProgram.mFeatures.calculatesAtmospherics  = true;
+        gSSRWaterProgram.mFeatures.hasAtmospherics         = true;
+        gSSRWaterProgram.mFeatures.hasScreenSpaceReflections = true;
+        gSSRWaterProgram.mFeatures.isDeferred              = true;
+        gSSRWaterProgram.mShaderLevel = 3;
+        gSSRWaterProgram.mShaderGroup = LLGLSLShader::SG_WATER;
+        success = gSSRWaterProgram.createShader();
     }
 
     if (success) {

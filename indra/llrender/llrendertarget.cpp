@@ -416,6 +416,21 @@ void LLRenderTarget::shareDepthBuffer(LLRenderTarget& target)
     }
 }
 
+void LLRenderTarget::blitDepthFrom(LLRenderTarget& source)
+{
+    llassert(mFBO);
+    llassert(source.mFBO);
+    llassert(mDepth);       // this target must own its depth buffer
+    llassert(source.mDepth); // source must have depth
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, source.mFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mFBO);
+    glBlitFramebuffer(0, 0, source.mResX, source.mResY,
+                      0, 0, mResX, mResY,
+                      GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, sCurFBO);
+}
+
 void LLRenderTarget::release()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;

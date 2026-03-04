@@ -335,3 +335,71 @@ LLColor3 LLDrawPoolWater::getDebugColor() const
 {
     return LLColor3(0.f, 1.f, 1.f);
 }
+
+void LLDrawPoolWater::renderSSR()
+{
+    if (!gSSRWaterProgram.isComplete()) return;
+    if (mDrawFace.empty()) return;
+
+    LL_PROFILE_GPU_ZONE("SSR water");
+
+    LLEnvironment& environment = LLEnvironment::instance();
+    LLSettingsWater::ptr_t pwater = environment.getCurrentWater();
+
+    bool has_normal_mips = gSavedSettings.getBOOL("RenderWaterMipNormal");
+    LLTexUnit::eTextureFilterOptions filter_mode = has_normal_mips ? LLTexUnit::TFO_ANISOTROPIC : LLTexUnit::TFO_POINT;
+
+    F32 phase_time = (F32)LLFrameTimer::getElapsedSeconds() * 0.5f;
+    F32 blend_factor = (F32)pwater->getBlendFactor();
+
+    gPipeline.bindDeferredShader(gSSRWaterProgram);
+
+    LLViewerTexture* tex_a = mWaterNormp[0];
+    LLViewerTexture* tex_b = mWaterNormp[1];
+
+    if (tex_a && (!tex_b || (tex_a == tex_b)))
+    {
+        gSSRWaterProgram.bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
+        tex_a->setFilteringOption(filter_mode);
+        blend_factor = 0;
+    }
+    else if (tex_b && !tex_a)
+    {
+        gSSRWaterProgram.bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_b);
+        tex_b->setFilteringOption(filter_mode);
+        blend_factor = 0;
+    }
+    else if (tex_b != tex_a)
+    {
+        gSSRWaterProgram.bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
+        tex_a->setFilteringOption(filter_mode);
+        gSSRWaterProgram.bindTexture(LLViewerShaderMgr::BUMP_MAP2, tex_b);
+        tex_b->setFilteringOption(filter_mode);
+    }
+
+    gSSRWaterProgram.uniform1f(LLShaderMgr::BLEND_FACTOR, blend_factor);
+
+    F32 water_height = environment.getWaterHeight();
+    F32 camera_height = LLViewerCamera::getInstance()->getOrigin().mV[2];
+    gSSRWaterProgram.uniform1f(LLShaderMgr::WATER_WATERHEIGHT, camera_height - water_height);
+    gSSRWaterProgram.uniform1f(LLShaderMgr::WATER_TIME, phase_time);
+    gSSRWaterProgram.uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
+    gSSRWaterProgram.uniform2fv(LLShaderMgr::WATER_WAVE_DIR1, 1, pwater->getWave1Dir().mV);
+    gSSRWaterProgram.uniform2fv(LLShaderMgr::WATER_WAVE_DIR2, 1, pwater->getWave2Dir().mV);
+
+    LLVector3 light_dir = environment.getLightDirection();
+    light_dir.normalize();
+    gSSRWaterProgram.uniform3fv(LLShaderMgr::WATER_LIGHT_DIR, 1, light_dir.mV);
+    gSSRWaterProgram.uniform3fv(LLShaderMgr::WATER_NORM_SCALE, 1, pwater->getNormalScale().mV);
+    gSSRWaterProgram.uniform1f(LLShaderMgr::WATER_BLUR_MULTIPLIER, fmaxf(0, pwater->getBlurMultiplier()) * 2);
+
+    LLVector4 rotated_light_direction = LLEnvironment::instance().getClampedLightNorm();
+    gSSRWaterProgram.uniform3fv(LLViewerShaderMgr::LIGHTNORM, 1, rotated_light_direction.mV);
+    gSSRWaterProgram.uniform3fv(LLShaderMgr::WL_CAMPOSLOCAL, 1, LLViewerCamera::getInstance()->getOrigin().mV);
+
+    LLGLDisable cullface(GL_CULL_FACE);
+
+    pushWaterPlanes(0);
+
+    gPipeline.unbindDeferredShader(gSSRWaterProgram);
+}

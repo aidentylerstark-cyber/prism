@@ -258,15 +258,31 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     static LLStaticHashedString tonemap_type("tonemap_type");
 
     static LLCachedControl<F32> exposure(gSavedSettings, "RenderExposure", 1.f);
-
-    F32 e = llclamp(exposure(), 0.5f, 4.f);
-
     static LLCachedControl<bool> should_auto_adjust(gSavedSettings, "RenderSkyAutoAdjustLegacy", false);
+    static LLCachedControl<bool> use_env_hdr_settings(gSavedSettings, "RenderHDRUseEnvironmentSettings", false);
+    static LLCachedControl<U32> tonemap_type_setting(gSavedSettings, "RenderTonemapType", 0U);
+    static LLCachedControl<F32> tonemap_mix_setting(gSavedSettings, "RenderTonemapMix", 1.f);
+
+    F32 e;
+    U32 tonemap_type_value;
+    F32 tonemap_mix_value;
+
+    if (use_env_hdr_settings && psky->getSkySettingVersion() > 1)
+    {
+        e = llclamp(psky->getHDROffset(should_auto_adjust()), 0.5f, 4.f);
+        tonemap_type_value = psky->getTonemapper();
+        tonemap_mix_value = psky->getTonemapMix(should_auto_adjust());
+    }
+    else
+    {
+        e = llclamp(exposure(), 0.5f, 4.f);
+        tonemap_type_value = tonemap_type_setting();
+        tonemap_mix_value = tonemap_mix_setting();
+    }
 
     shader->uniform1f(s_exposure, e);
-    static LLCachedControl<U32> tonemap_type_setting(gSavedSettings, "RenderTonemapType", 0U);
-    shader->uniform1i(tonemap_type, tonemap_type_setting);
-    shader->uniform1f(tonemap_mix, psky->getTonemapMix(should_auto_adjust()));
+    shader->uniform1i(tonemap_type, tonemap_type_value);
+    shader->uniform1f(tonemap_mix, tonemap_mix_value);
 
     F32 sunAngle = llmax(0.f, light_dir.mV[1]);
     F32 scaledAngle = 1.f - sunAngle;

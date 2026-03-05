@@ -1100,6 +1100,7 @@ public:
     static S32 RenderScreenSpaceReflectionGlossySamples;
     static S32 RenderBufferVisualization;
     static bool RenderMirrors;
+    static S32 RenderMirrorCount;
     static S32 RenderHeroProbeUpdateRate;
     static S32 RenderHeroProbeConservativeUpdateMultiplier;
     static bool RenderAvatarCloth;

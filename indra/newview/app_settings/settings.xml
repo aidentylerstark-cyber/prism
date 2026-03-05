@@ -7731,107 +7731,35 @@
   <key>RenderScreenSpaceReflectionIterations</key>
   <map>
     <key>Comment</key>
-    <string>X = max ray march steps. Y, Z unused.</string>
+    <string>Maximum ray march iterations for Hi-Z SSR trace.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
-    <string>Vector3</string>
+    <string>S32</string>
     <key>Value</key>
-    <array>
-      <real>32</real>
-      <real>16</real>
-      <real>16</real>
-    </array>
+    <integer>48</integer>
   </map>
-  <key>RenderScreenSpaceReflectionRayStep</key>
+  <key>RenderScreenSpaceReflectionMaxThickness</key>
   <map>
     <key>Comment</key>
-    <string>X = initial ray march step size. Y, Z unused.</string>
+    <string>Maximum thickness for SSR hit validation (view-space units).</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
-    <string>Vector3</string>
+    <string>F32</string>
     <key>Value</key>
-    <array>
-      <real>0.025</real>
-      <real>0.75</real>
-      <real>1</real>
-    </array>
+    <real>1.0</real>
   </map>
-  <key>RenderScreenSpaceReflectionDistanceBias</key>
+  <key>RenderScreenSpaceReflectionDepthBias</key>
   <map>
     <key>Comment</key>
-    <string>X = max step size cap. Y, Z unused.</string>
+    <string>Depth bias scale for SSR ray origin offset along surface normal.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
-    <string>Vector3</string>
+    <string>F32</string>
     <key>Value</key>
-    <array>
-      <real>10.0</real>
-      <real>0.4</real>
-      <real>10</real>
-    </array>
-  </map>
-  <key>RenderScreenSpaceReflectionDepthRejectBias</key>
-  <map>
-    <key>Comment</key>
-    <string>X = max thickness for hit validation. Y = depth bias scale for ray origin offset. Z unused.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>Vector3</string>
-    <key>Value</key>
-    <array>
-      <real>1.0</real>
-      <real>0</real>
-      <real>0.001</real>
-    </array>
-  </map>
-  <key>RenderScreenSpaceReflectionAdaptiveStepMultiplier</key>
-  <map>
-    <key>Comment</key>
-    <string>X = step growth rate per iteration. Y, Z unused.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>Vector3</string>
-    <key>Value</key>
-    <array>
-      <real>1.3</real>
-      <real>1.5</real>
-      <real>2</real>
-    </array>
-  </map>
-  <key>RenderScreenSpaceReflectionSplitStart</key>
-  <map>
-    <key>Comment</key>
-    <string>Starting splits for each SSR pass.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>Vector3</string>
-    <key>Value</key>
-    <array>
-      <real>0</real>
-      <real>5</real>
-      <real>50</real>
-    </array>
-  </map>
-  <key>RenderScreenSpaceReflectionSplitEnd</key>
-  <map>
-    <key>Comment</key>
-    <string>Ending splits for each SSR pass.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>Vector3</string>
-    <key>Value</key>
-    <array>
-      <real>25</real>
-      <real>150</real>
-      <real>1000</real>
-    </array>
+    <real>0.0</real>
   </map>
   <key>RenderScreenSpaceReflectionGlossySamples</key>
   <map>
@@ -7842,7 +7770,7 @@
     <key>Type</key>
     <string>S32</string>
     <key>Value</key>
-    <integer>4</integer>
+    <integer>2</integer>
   </map>
   <key>RenderScreenSpaceReflectionMaxDepth</key>
   <map>
@@ -7865,6 +7793,28 @@
     <string>F32</string>
     <key>Value</key>
     <real>1</real>
+  </map>
+  <key>RenderScreenSpaceReflectionsFilterScale</key>
+  <map>
+    <key>Comment</key>
+    <string>Blur size for the SSR spatial filter (0.0 to disable, default 2.0).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>2.0</real>
+  </map>
+  <key>RenderScreenSpaceReflectionsResolutionMultiplier</key>
+  <map>
+    <key>Comment</key>
+    <string>Resolution multiplier for the SSR buffer (0.25 to 1.0).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
   </map>
   <key>RenderBumpmapMinDistanceSquared</key>
     <map>

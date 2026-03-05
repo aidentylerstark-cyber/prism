@@ -174,6 +174,7 @@ extern LLGLSLShader         gBenchmarkProgram;
 extern LLGLSLShader         gReflectionProbeDisplayProgram;
 extern LLGLSLShader         gCopyProgram;
 extern LLGLSLShader         gCopyDepthProgram;
+extern LLGLSLShader         gHiZReduceProgram;
 extern LLGLSLShader         gPBRTerrainBakeProgram;
 extern LLGLSLShader         gDrawColorProgram;
 
@@ -214,6 +215,12 @@ extern LLGLSLShader         gImpostorProgram;
 // Post Process Shaders
 extern LLGLSLShader         gPostScreenSpaceReflectionProgram;
 
+// SSR Trace
+extern LLGLSLShader         gScreenSpaceReflTraceProgram;
+extern LLGLSLShader         gSSRAlphaProgram;
+extern LLGLSLShader         gSkinnedSSRAlphaProgram;
+extern LLGLSLShader         gSSRWaterProgram;
+
 // Deferred rendering shaders
 extern LLGLSLShader         gDeferredImpostorProgram;
 extern LLGLSLShader         gDeferredDiffuseProgram;
@@ -234,6 +241,7 @@ extern LLGLSLShader         gDeferredSunProbeProgram;
 extern LLGLSLShader         gHazeProgram;
 extern LLGLSLShader         gHazeWaterProgram;
 extern LLGLSLShader         gDeferredBlurLightProgram;
+extern LLGLSLShader         gSSRFilterProgram;
 extern LLGLSLShader         gDeferredAvatarProgram;
 extern LLGLSLShader         gDeferredSoftenProgram;
 extern LLGLSLShader         gDeferredSoftenCubeProgram;

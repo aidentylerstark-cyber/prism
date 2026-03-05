@@ -153,6 +153,11 @@ public:
     void bindScreenToTexture();
     void renderFinalize();
     void copyScreenSpaceReflections(LLRenderTarget* src, LLRenderTarget* dst);
+    void buildHiZBuffer();
+    void renderSSRTrace();
+    void renderSSRAlpha();
+    void renderSSRWater();
+    void filterSSRBuffer();
     void generateLuminance(LLRenderTarget* src, LLRenderTarget* dst);
     void generateExposure(LLRenderTarget* src, LLRenderTarget* dst, bool use_history = true);
     void tonemap(LLRenderTarget* src, LLRenderTarget* dst, bool gamma_correct);
@@ -730,6 +735,10 @@ public:
     // for use by SSR
     LLRenderTarget          mSceneMap;
 
+    // Pre-computed SSR: RGB=reflection, A=fade
+    LLRenderTarget          mSSRBuffer;
+    std::vector<LLRenderTarget> mSSRMipTemp;  // Per-mip temp targets for SSR Gaussian ping-pong
+
     // exposure map for getting average color in scene
     LLRenderTarget          mLuminanceMap;
     LLRenderTarget          mExposureMap;
@@ -1088,10 +1097,6 @@ public:
     static F32 RenderAutoHideSurfaceAreaLimit;
     static bool RenderScreenSpaceReflections;
     static S32 RenderScreenSpaceReflectionIterations;
-    static F32 RenderScreenSpaceReflectionRayStep;
-    static F32 RenderScreenSpaceReflectionDistanceBias;
-    static F32 RenderScreenSpaceReflectionDepthRejectBias;
-    static F32 RenderScreenSpaceReflectionAdaptiveStepMultiplier;
     static S32 RenderScreenSpaceReflectionGlossySamples;
     static S32 RenderBufferVisualization;
     static bool RenderMirrors;

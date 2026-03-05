@@ -25,18 +25,19 @@
 
 #define FLT_MAX 3.402823466e+38
 
-#if defined(SSR)
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
-#endif
-
 uniform samplerCubeArray   reflectionProbes;
 uniform samplerCubeArray   irradianceProbes;
 
 uniform sampler2D sceneMap;
+uniform vec2 screen_res;
 uniform int cube_snapshot;
 uniform float max_probe_lod;
 
 uniform bool transparent_surface;
+
+uniform float ssrMipScale;
+
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
 
 uniform int classic_mode;
 
@@ -814,19 +815,35 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = vec4(0);
-        if (transparent)
+        float roughness = 1.0 - glossiness;
+        if (roughness < 0.7)
         {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, 1);
-            ssr.a *= glossiness;
-        }
-        else
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, glossiness);
-        }
+            vec4 ssr = vec4(0.0);
 
+            if (transparent)
+            {
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+            }
+            else
+            {
+                ssr = textureLod(sceneMap, tc, roughness * ssrMipScale);
+            }
 
-        glossenv = mix(glossenv, ssr.rgb, ssr.a);
+            if (ssr.a > 0.001)
+            {
+                ssr.rgb /= ssr.a;
+
+                float l = dot(ssr.rgb, vec3(0.2126, 0.7152, 0.0722));
+                ssr.rgb /= max(1.0 - l, 0.001);
+
+                ssr.a *= 1.0 - smoothstep(0.6, 0.7, roughness);
+
+                if (transparent)
+                    ssr.a *= glossiness;
+
+                glossenv = mix(glossenv, ssr.rgb, ssr.a);
+            }
+        }
     }
 #endif
 
@@ -929,20 +946,36 @@ void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout 
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = vec4(0);
-
-        if (transparent)
+        float roughness = 1.0 - glossiness;
+        if (roughness < 0.7)
         {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, 1);
-            ssr.a *= glossiness;
-        }
-        else
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssr, sceneMap, glossiness);
-        }
+            vec4 ssr = vec4(0.0);
 
-        glossenv = mix(glossenv, ssr.rgb, ssr.a);
-        legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
+            if (transparent)
+            {
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+            }
+            else
+            {
+                float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
+                ssr = textureLod(sceneMap, tc, ssrLod);
+            }
+
+            if (ssr.a > 0.001)
+            {
+                ssr.rgb /= ssr.a;
+                float l = dot(ssr.rgb, vec3(0.2126, 0.7152, 0.0722));
+                ssr.rgb /= max(1.0 - l, 0.001);
+
+                ssr.a *= 1.0 - smoothstep(0.6, 0.7, roughness);
+
+                if (transparent)
+                    ssr.a *= glossiness;
+
+                glossenv = mix(glossenv, ssr.rgb, ssr.a);
+                legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
+            }
+        }
     }
 #endif
 

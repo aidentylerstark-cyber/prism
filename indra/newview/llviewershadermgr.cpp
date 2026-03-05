@@ -1791,7 +1791,6 @@ bool LLViewerShaderMgr::loadShadersDeferred()
     {
         gSSRFilterProgram.mName = "SSR Filter Shader";
         gSSRFilterProgram.mFeatures.isDeferred = true;
-        gSSRFilterProgram.mFeatures.hasFullGBuffer = true;
         gSSRFilterProgram.mShaderFiles.clear();
         gSSRFilterProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
         gSSRFilterProgram.mShaderFiles.push_back(make_pair("deferred/screenSpaceReflFilterF.glsl", GL_FRAGMENT_SHADER));

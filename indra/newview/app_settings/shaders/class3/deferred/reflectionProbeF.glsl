@@ -35,6 +35,8 @@ uniform float max_probe_lod;
 
 uniform bool transparent_surface;
 
+uniform float ssrMipScale;
+
 uniform int classic_mode;
 
 #define MAX_REFMAP_COUNT 256  // must match LL_MAX_REFLECTION_PROBE_COUNT
@@ -800,12 +802,30 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = texture(sceneMap, tc);
+        float roughness = 1.0 - glossiness;
+        if (roughness < 0.7)
+        {
+            float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
+            vec4 ssr = textureLod(sceneMap, tc, roughness * ssrMipScale);
 
-        if (transparent)
-            ssr.a *= glossiness;
+            if (ssr.a > 0.001)
+            {
+                // Un-premultiply (recover validity-weighted average)
+                ssr.rgb /= ssr.a;
 
-        glossenv = mix(glossenv, ssr.rgb, ssr.a);
+                // Inverse tone map (undo Reinhard from trace)
+                float l = dot(ssr.rgb, vec3(0.2126, 0.7152, 0.0722));
+                ssr.rgb /= max(1.0 - l, 0.001);
+
+                // Roughness fade (Godot: smoothstep 0.6-0.7)
+                ssr.a *= 1.0 - smoothstep(0.6, 0.7, roughness);
+
+                if (transparent)
+                    ssr.a *= glossiness;
+
+                glossenv = mix(glossenv, ssr.rgb, ssr.a);
+            }
+        }
     }
 #endif
 
@@ -908,13 +928,27 @@ void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout 
 #if defined(SSR)
     if (cube_snapshot != 1)
     {
-        vec4 ssr = texture(sceneMap, tc);
+        float roughness = 1.0 - glossiness;
+        if (roughness < 0.7)
+        {
+            float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
+            vec4 ssr = textureLod(sceneMap, tc, ssrLod);
 
-        if (transparent)
-            ssr.a *= glossiness;
+            if (ssr.a > 0.001)
+            {
+                ssr.rgb /= ssr.a;
+                float l = dot(ssr.rgb, vec3(0.2126, 0.7152, 0.0722));
+                ssr.rgb /= max(1.0 - l, 0.001);
 
-        glossenv = mix(glossenv, ssr.rgb, ssr.a);
-        legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
+                ssr.a *= 1.0 - smoothstep(0.6, 0.7, roughness);
+
+                if (transparent)
+                    ssr.a *= glossiness;
+
+                glossenv = mix(glossenv, ssr.rgb, ssr.a);
+                legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
+            }
+        }
     }
 #endif
 

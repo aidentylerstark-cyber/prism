@@ -1040,13 +1040,6 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
             gPipeline.renderSSRWater();
             gPipeline.filterSSRBuffer();
 
-            // Generate mipmaps for roughness-based blur
-            if (LLPipeline::RenderScreenSpaceReflections && gPipeline.mSSRBuffer.isComplete())
-            {
-                gGL.getTexUnit(0)->bind(&gPipeline.mSSRBuffer);
-                glGenerateMipmap(GL_TEXTURE_2D);
-            }
-
             gPipeline.renderDeferredLighting();
 
             // Copy screen to scene map for SSR to trace against next frame/pass.

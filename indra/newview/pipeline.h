@@ -737,7 +737,7 @@ public:
 
     // Pre-computed SSR: RGB=reflection, A=fade
     LLRenderTarget          mSSRBuffer;
-    LLRenderTarget          mSSRFilterTemp;  // Ping-pong target for SSR filter
+    std::vector<LLRenderTarget> mSSRMipTemp;  // Per-mip temp targets for SSR Gaussian ping-pong
 
     // exposure map for getting average color in scene
     LLRenderTarget          mLuminanceMap;
@@ -1097,10 +1097,6 @@ public:
     static F32 RenderAutoHideSurfaceAreaLimit;
     static bool RenderScreenSpaceReflections;
     static S32 RenderScreenSpaceReflectionIterations;
-    static F32 RenderScreenSpaceReflectionRayStep;
-    static F32 RenderScreenSpaceReflectionDistanceBias;
-    static F32 RenderScreenSpaceReflectionDepthRejectBias;
-    static F32 RenderScreenSpaceReflectionAdaptiveStepMultiplier;
     static S32 RenderScreenSpaceReflectionGlossySamples;
     static S32 RenderBufferVisualization;
     static bool RenderMirrors;

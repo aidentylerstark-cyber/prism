@@ -162,6 +162,13 @@ public:
     // Restore FBO depth attachment to mip level 0 and full viewport.
     void resetDepthMipLevel();
 
+    // Rebind FBO color attachment at a specific mip level and set viewport.
+    // Used for per-mip SSR filter. Caller must call resetColorMipLevel() when done.
+    void bindColorMipLevel(S32 level, U32 attachment = 0);
+
+    // Restore FBO color attachment to mip level 0 and full viewport.
+    void resetColorMipLevel(U32 attachment = 0);
+
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
 
     //flush rendering operations

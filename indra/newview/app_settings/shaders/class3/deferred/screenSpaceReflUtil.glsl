@@ -34,23 +34,15 @@ uniform mat4 inv_proj;
 uniform mat4 modelview_delta;
 uniform mat4 inv_modelview_delta;
 
-// Declared to keep pipeline uniform setup happy
-uniform vec3 iterationCount;
-uniform vec3 rayStep;
-uniform vec3 distanceBias;
-uniform vec3 depthRejectBias;
-uniform vec3 adaptiveStepMultiplier;
-uniform vec3 splitParamsStart;
-uniform vec3 splitParamsEnd;
+uniform int iterationCount;
+uniform float maxThickness;
+uniform float depthBias;
 uniform float glossySampleCount;
 uniform float noiseSine;
 uniform float maxZDepth;
 uniform float maxRoughness;
 uniform vec2 ssrJitterOffset;
 uniform int hizMipCount;
-
-#define MAX_THICKNESS   depthRejectBias.x
-#define DEPTH_BIAS      depthRejectBias.y
 
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 
@@ -186,7 +178,7 @@ vec4 hiZTrace(vec3 origin, vec3 dir, int maxIterations)
         {
             float z0 = getPositionWithDepth(pos.xy, cellDepth).z;
             float z1 = getPositionWithDepth(pos.xy, pos.z).z;
-            if ((z0 - z1) > MAX_THICKNESS)
+            if ((z0 - z1) > maxThickness)
             {
                 hit = false;
                 mipOffset = 0;  // Stay at mip 0, march cell-by-cell.
@@ -262,8 +254,8 @@ float tapScreenSpaceReflection(
     // Bias the ray origin along the normal, scaled by distance.
     // Prevents grazing-angle rays from scraping the originating surface
     // at distance where depth precision breaks down.
-    float depthBias = max(0.01, -viewPos.z * DEPTH_BIAS);
-    vec3 biasedPos = viewPos - normal * depthBias;
+    float biasAmount = max(0.01, -viewPos.z * depthBias);
+    vec3 biasedPos = viewPos - normal * biasAmount;
 
     vec3 transformedPos = (inv_modelview_delta * vec4(biasedPos, 1.0)).xyz;
     float startDepth = -transformedPos.z;
@@ -334,7 +326,7 @@ float tapScreenSpaceReflection(
                           projectDepth(transformedEnd));
         vec3 ssDir = ssFar - ssOrigin;
 
-        vec4 result = hiZTrace(ssOrigin, ssDir, int(iterationCount.x));
+        vec4 result = hiZTrace(ssOrigin, ssDir, iterationCount);
 
         if (result.x < 0.0)
             continue;
@@ -358,7 +350,7 @@ float tapScreenSpaceReflection(
         vec3 viewSpaceSurface = getPositionWithDepth(hitTC, hitSurfaceDepth).xyz;
         vec3 viewSpaceHit = getPositionWithDepth(hitTC, result.z).xyz;
         float hitDistance = length(viewSpaceSurface - viewSpaceHit);
-        float confidence = 1.0 - smoothstep(0.0, MAX_THICKNESS, hitDistance);
+        float confidence = 1.0 - smoothstep(0.0, maxThickness, hitDistance);
         confidence *= confidence;
 
         // Short-ray back-face check (Godot-style):
@@ -387,18 +379,19 @@ float tapScreenSpaceReflection(
         float zFadeStart = maxZDepth * 0.8;
         float zFade = 1.0 - smoothstep(zFadeStart, maxZDepth, hitDepth);
 
-        float maxMipLevels = floor(log2(max(screen_res.x, screen_res.y)));
-        float distanceFactor = clamp(rayLen, 0.0, 1.0);
-        float effectiveRoughness = clamp(roughness + distanceFactor * roughness, 0.0, 1.0);
-        float mipLevel = maxMipLevels * effectiveRoughness;
-        vec4 sampledColor = textureLod(source, hitTC, mipLevel);
+        vec4 sampledColor = textureLod(source, hitTC, 0.0);
+
+        // Tone map hit color (Reinhard on luminance) to compress brights
+        // before mip chain averaging — prevents fireflies.
+        float luma = dot(sampledColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+        sampledColor.rgb /= (1.0 + luma);
 
         // Fade-in: suppress near-origin artifacts from self-intersection.
         float fadeIn = smoothstep(0.0, 0.01, rayLen);
         float rayFade = 1.0 - smoothstep(0.6, 1.0, rayLen);
         float sampleFade = edgeFade * zFade * fadeIn * rayFade * confidence;
 
-        accumColor += sampledColor.rgb;
+        accumColor += sampledColor.rgb * sampleFade;
         accumFade += sampleFade;
         hits++;
     }
@@ -412,11 +405,8 @@ float tapScreenSpaceReflection(
     accumColor /= float(numSamples);
     accumFade /= float(numSamples);
 
-    float remappedRoughness = clamp((roughness - (maxRoughness * 0.6)) / (maxRoughness - (maxRoughness * 0.6)), 0.0, 1.0);
-    float roughnessFade = 1.0 - remappedRoughness;
+    float combinedFade = accumFade * baseEdgeFade;
 
-    float combinedFade = accumFade * roughnessFade * baseEdgeFade;
-
-    collectedColor = vec4(accumColor, combinedFade);
+    collectedColor = vec4(accumColor * baseEdgeFade, combinedFade);
     return 1.0;
 }

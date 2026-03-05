@@ -184,14 +184,10 @@ public:
         DEFERRED_SHADOW_TARGET_WIDTH,       //  "shadow_target_width"
 
         DEFERRED_SSR_ITR_COUNT,             //  "iterationCount"
-        DEFERRED_SSR_RAY_STEP,              //  "rayStep"
-        DEFERRED_SSR_DIST_BIAS,             //  "distanceBias"
-        DEFERRED_SSR_REJECT_BIAS,           //  "depthRejectBias"
+        DEFERRED_SSR_MAX_THICKNESS,         //  "maxThickness"
+        DEFERRED_SSR_DEPTH_BIAS,            //  "depthBias"
         DEFERRED_SSR_GLOSSY_SAMPLES,        //  "glossySampleCount"
         DEFERRED_SSR_NOISE_SINE,            //  "noiseSine"
-        DEFERRED_SSR_ADAPTIVE_STEP_MULT,    //  "adaptiveStepMultiplier"
-        DEFERRED_SSR_SPLIT_START,           //  "splitParamsStart"
-        DEFERRED_SSR_SPLIT_END,             //  "splitParamsEnd"
         DEFERRED_SSR_MAX_Z,                 //  "maxZDepth"
         DEFERRED_SSR_MAX_ROUGHNESS,         //  "maxRoughness"
 

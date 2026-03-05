@@ -383,6 +383,32 @@ void LLRenderTarget::resetDepthMipLevel()
     glDrawBuffers((GLsizei)mTex.size(), drawbuffers);
 }
 
+void LLRenderTarget::bindColorMipLevel(S32 level, U32 attachment)
+{
+    llassert(mFBO);
+    llassert(attachment < mTex.size());
+    llassert(level < (S32)mMipLevels);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
+    sCurFBO = mFBO;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + attachment,
+        LLTexUnit::getInternalType(mUsage), mTex[attachment], level);
+
+    S32 w = llmax(1, (S32)(mResX >> level));
+    S32 h = llmax(1, (S32)(mResY >> level));
+    glViewport(0, 0, w, h);
+}
+
+void LLRenderTarget::resetColorMipLevel(U32 attachment)
+{
+    llassert(mFBO);
+    llassert(attachment < mTex.size());
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + attachment,
+        LLTexUnit::getInternalType(mUsage), mTex[attachment], 0);
+    glViewport(0, 0, mResX, mResY);
+}
+
 void LLRenderTarget::shareDepthBuffer(LLRenderTarget& target)
 {
     llassert(!isBoundInStack());

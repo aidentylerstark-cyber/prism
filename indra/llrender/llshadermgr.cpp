@@ -1389,14 +1389,10 @@ void LLShaderMgr::initAttribsAndUniforms()
     llassert(mReservedUniforms.size() == LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH + 1);
 
     mReservedUniforms.push_back("iterationCount");
-    mReservedUniforms.push_back("rayStep");
-    mReservedUniforms.push_back("distanceBias");
-    mReservedUniforms.push_back("depthRejectBias");
+    mReservedUniforms.push_back("maxThickness");
+    mReservedUniforms.push_back("depthBias");
     mReservedUniforms.push_back("glossySampleCount");
     mReservedUniforms.push_back("noiseSine");
-    mReservedUniforms.push_back("adaptiveStepMultiplier");
-    mReservedUniforms.push_back("splitParamsStart");
-    mReservedUniforms.push_back("splitParamsEnd");
     mReservedUniforms.push_back("maxZDepth");
     mReservedUniforms.push_back("maxRoughness");
 

@@ -37,6 +37,8 @@ uniform bool transparent_surface;
 
 uniform float ssrMipScale;
 
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+
 uniform int classic_mode;
 
 #define MAX_REFMAP_COUNT 256  // must match LL_MAX_REFLECTION_PROBE_COUNT
@@ -805,19 +807,24 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
         float roughness = 1.0 - glossiness;
         if (roughness < 0.7)
         {
-            float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
-            vec4 ssr = textureLod(sceneMap, tc, roughness * ssrMipScale);
+            vec4 ssr = vec4(0.0);
+
+            if (transparent)
+            {
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+            }
+            else
+            {
+                ssr = textureLod(sceneMap, tc, roughness * ssrMipScale);
+            }
 
             if (ssr.a > 0.001)
             {
-                // Un-premultiply (recover validity-weighted average)
                 ssr.rgb /= ssr.a;
 
-                // Inverse tone map (undo Reinhard from trace)
                 float l = dot(ssr.rgb, vec3(0.2126, 0.7152, 0.0722));
                 ssr.rgb /= max(1.0 - l, 0.001);
 
-                // Roughness fade (Godot: smoothstep 0.6-0.7)
                 ssr.a *= 1.0 - smoothstep(0.6, 0.7, roughness);
 
                 if (transparent)
@@ -931,8 +938,17 @@ void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout 
         float roughness = 1.0 - glossiness;
         if (roughness < 0.7)
         {
-            float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
-            vec4 ssr = textureLod(sceneMap, tc, ssrLod);
+            vec4 ssr = vec4(0.0);
+
+            if (transparent)
+            {
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+            }
+            else
+            {
+                float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
+                ssr = textureLod(sceneMap, tc, ssrLod);
+            }
 
             if (ssr.a > 0.001)
             {

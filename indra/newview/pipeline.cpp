@@ -7412,7 +7412,7 @@ void LLPipeline::renderSSRTrace()
     mSSRBuffer.bindTarget();
     mSSRBuffer.clear(GL_COLOR_BUFFER_BIT);
 
-    LLGLDepthTest depth(GL_FALSE);
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
     LLGLDisable blend(GL_BLEND);
 
     bindDeferredShader(gScreenSpaceReflTraceProgram);
@@ -7580,6 +7580,14 @@ void LLPipeline::renderSSRAlpha()
     }
 
     mSSRBuffer.flush();
+
+    // Reset modelview to camera-only — applyModelMatrix leaves a stale
+    // object transform that would corrupt light volume positions in
+    // renderDeferredLighting (the point light vertex shader multiplies by
+    // modelview_projection_matrix via syncMatrices).
+    gGLLastMatrix = NULL;
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.loadMatrix(gGLModelView);
 }
 
 void LLPipeline::renderSSRWater()
@@ -7604,6 +7612,12 @@ void LLPipeline::renderSSRWater()
     static_cast<LLDrawPoolWater*>(pool)->renderSSR();
 
     mSSRBuffer.flush();
+
+    // Same matrix reset as renderSSRAlpha — water geometry may leave a stale
+    // modelview that would corrupt light volume positions in deferred lighting.
+    gGLLastMatrix = NULL;
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.loadMatrix(gGLModelView);
 }
 
 void LLPipeline::filterSSRBuffer()
@@ -7619,7 +7633,7 @@ void LLPipeline::filterSSRBuffer()
     if (mSSRMipTemp.empty()) return;
 
     LLGLDisable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_FALSE);
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
 
     // Identity matrices for screen-space rendering (same as probe manager)
     gGL.matrixMode(gGL.MM_MODELVIEW);
@@ -7677,6 +7691,12 @@ void LLPipeline::filterSSRBuffer()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mipLevels - 1);
     mSSRBuffer.resetColorMipLevel();
+
+    // bindColorMipLevel bypasses the RT stack (direct glBindFramebuffer),
+    // so we must manually unbind the FBO here to avoid corrupting GL state
+    // for renderDeferredLighting.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    LLRenderTarget::sCurFBO = 0;
 
     gGaussianProgram.unbind();
 
@@ -7751,6 +7771,11 @@ void LLPipeline::buildHiZBuffer()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mipLevels - 1);
     mSceneMap.resetDepthMipLevel();
+
+    // bindDepthMipLevel bypasses the RT stack (direct glBindFramebuffer),
+    // so we must manually unbind the FBO here.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    LLRenderTarget::sCurFBO = 0;
 
     gHiZReduceProgram.unbind();
 }
@@ -9906,11 +9931,18 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
     {
         // Determine if this shader is performing the SSR trace (needs previous
         // frame scene map + trace uniforms) or reading pre-computed SSR results
-        // from the SSR buffer.
+        // from the SSR buffer.  Forward alpha shaders also need trace bindings
+        // so transparent surfaces can trace their own SSR inline rather than
+        // reading incorrect opaque-surface SSR from the pre-computed buffer.
         bool inSSRTracePass = (&shader == &gScreenSpaceReflTraceProgram)
                            || (&shader == &gSSRAlphaProgram)
                            || (&shader == &gSkinnedSSRAlphaProgram)
-                           || (&shader == &gSSRWaterProgram);
+                           || (&shader == &gSSRWaterProgram)
+                           || (&shader == &gDeferredPBRAlphaProgram)
+                           || (gDeferredPBRAlphaProgram.mRiggedVariant && &shader == gDeferredPBRAlphaProgram.mRiggedVariant)
+                           || (&shader == &gDeferredAlphaProgram)
+                           || (gDeferredAlphaProgram.mRiggedVariant && &shader == gDeferredAlphaProgram.mRiggedVariant)
+                           || (&shader == &gDeferredAvatarAlphaProgram);
 
         channel = shader.enableTexture(LLShaderMgr::SCENE_MAP);
         if (channel > -1)
@@ -9920,7 +9952,7 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
                 // Trace pass: bind previous frame's lit scene for ray marching
                 gGL.getTexUnit(channel)->bind(&mSceneMap);
             }
-            else if (mSSRBuffer.isComplete())
+            else if (mSSRBuffer.isComplete() && !gCubeSnapshot)
             {
                 // Lighting pass: bind pre-computed SSR buffer with trilinear for mip sampling
                 gGL.getTexUnit(channel)->bind(&mSSRBuffer);
@@ -9932,7 +9964,8 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
             }
             else
             {
-                // Fallback: bind scene map
+                // Fallback / cube snapshot: bind scene map (probes should not
+                // see the main camera's SSR buffer)
                 gGL.getTexUnit(channel)->bind(&mSceneMap);
             }
         }
@@ -9950,10 +9983,22 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_THICKNESS, traceMaxThickness);
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_DEPTH_BIAS, traceDepthBias);
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_GLOSSY_SAMPLES, (GLfloat)RenderScreenSpaceReflectionGlossySamples);
-            mPoissonOffset++;
 
-            if (mPoissonOffset > 128 - RenderScreenSpaceReflectionGlossySamples)
-                mPoissonOffset = 0;
+            // Only advance the Poisson noise offset for the dedicated SSR trace
+            // programs — not for every forward alpha bind.  Otherwise the offset
+            // increments hundreds of times per frame (once per alpha draw call),
+            // with the count varying by what's visible, destabilizing the noise
+            // seed between frames and causing SSR to flicker.
+            bool isSSRTraceProgram = (&shader == &gScreenSpaceReflTraceProgram)
+                                  || (&shader == &gSSRAlphaProgram)
+                                  || (&shader == &gSkinnedSSRAlphaProgram)
+                                  || (&shader == &gSSRWaterProgram);
+            if (isSSRTraceProgram)
+            {
+                mPoissonOffset++;
+                if (mPoissonOffset > 128 - RenderScreenSpaceReflectionGlossySamples)
+                    mPoissonOffset = 0;
+            }
 
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_NOISE_SINE, (GLfloat)mPoissonOffset);
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_Z, traceMaxDepth());

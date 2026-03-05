@@ -64,4 +64,5 @@ void main()
     vec4 ssrColor = vec4(0.0);
     tapScreenSpaceReflection(1, tc, vary_position, norm, ssrColor, sceneMap, glossiness);
     frag_color = ssrColor;
+    frag_color.a *= alpha;
 }

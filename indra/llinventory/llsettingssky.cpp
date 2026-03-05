@@ -1332,7 +1332,6 @@ void LLSettingsSky::saveValuesToLLSD()
     settings[SETTING_SUN_SCALE] = mSunScale;
     settings[SETTING_SUN_ROTATION] = mSunRotation.getValue();
     settings[SETTING_SUNLIGHT_COLOR] = mSunlightColor.getValue();
-    settings[SETTING_SUN_BRIGHTNESS] = mSunBrightness;
     settings[SETTING_STAR_BRIGHTNESS] = mStarBrightness;
     settings[SETTING_MOON_BRIGHTNESS] = mMoonBrightness;
     settings[SETTING_MOON_SCALE] = mMoonScale;
@@ -1357,12 +1356,16 @@ void LLSettingsSky::saveValuesToLLSD()
     settings[SETTING_SKY_DROPLET_RADIUS] = mSkyDropletRadius;
     settings[SETTING_SKY_ICE_LEVEL] = mSkyIceLevel;
     settings[SETTING_PLANET_RADIUS] = mPlanetRadius;
-    settings[SETTING_HDR_MAX] = mHDRMax;
-    settings[SETTING_HDR_MIN] = mHDRMin;
-    settings[SETTING_HDR_OFFSET] = mHDROffset;
-    settings[SETTING_HDR_TONEMAPPER] = mTonemapper;
-    settings[SETTING_HDR_TONEMAPPER_AMOUNT] = mTonemapMix;
-    settings[SETTING_SKY_VERSION] = mSkySettingVersion;
+    if (mSkySettingVersion > 1)
+    {
+        settings[SETTING_HDR_MAX] = mHDRMax;
+        settings[SETTING_HDR_MIN] = mHDRMin;
+        settings[SETTING_HDR_OFFSET] = mHDROffset;
+        settings[SETTING_HDR_TONEMAPPER] = mTonemapper;
+        settings[SETTING_HDR_TONEMAPPER_AMOUNT] = mTonemapMix;
+        settings[SETTING_SKY_VERSION] = mSkySettingVersion;
+        settings[SETTING_SUN_BRIGHTNESS] = mSunBrightness;
+    }
 
     LLSD& legacy = settings[SETTING_LEGACY_HAZE];
     set_legacy(settings, legacy, SETTING_DISTANCE_MULTIPLIER, mLegacyDistanceMultiplier, LLSD::Real(mDistanceMultiplier));
@@ -2100,7 +2103,7 @@ F32 LLSettingsSky::getGamma() const
 
 F32 LLSettingsSky::getHDRMin(bool auto_adjust) const
 {
-    if (mCanAutoAdjust && !auto_adjust)
+    if ((mCanAutoAdjust || mSkySettingVersion < 2) && !auto_adjust)
         return 0.f;
 
     return mHDRMin;
@@ -2108,7 +2111,7 @@ F32 LLSettingsSky::getHDRMin(bool auto_adjust) const
 
 F32 LLSettingsSky::getHDRMax(bool auto_adjust) const
 {
-    if (mCanAutoAdjust && !auto_adjust)
+    if ((mCanAutoAdjust || mSkySettingVersion < 2) && !auto_adjust)
         return 0.f;
 
     return mHDRMax;
@@ -2116,7 +2119,7 @@ F32 LLSettingsSky::getHDRMax(bool auto_adjust) const
 
 F32 LLSettingsSky::getHDROffset(bool auto_adjust) const
 {
-    if (mCanAutoAdjust && !auto_adjust)
+    if ((mCanAutoAdjust || mSkySettingVersion < 2) && !auto_adjust)
         return 1.0f;
 
     return mHDROffset;
@@ -2145,7 +2148,7 @@ void LLSettingsSky::setHDROffset(F32 val)
 
 F32 LLSettingsSky::getTonemapMix(bool auto_adjust) const
 {
-    if (mCanAutoAdjust && !auto_adjust)
+    if ((mCanAutoAdjust || mSkySettingVersion < 2) && !auto_adjust)
     {
         // legacy settings do not support tonemaping
         return 0.0f;
@@ -2275,6 +2278,12 @@ void LLSettingsSky::setStarBrightness(F32 val)
 
 F32 LLSettingsSky::getSunBrightness() const
 {
+    if (mSkySettingVersion < 2)
+    {
+        // V1 skies used a ~1.0 light scale.
+        // Return the lux equivalent for a PBR pipeline (shader normalizes by dividing by 100000).
+        return 130000.f;
+    }
     return mSunBrightness;
 }
 

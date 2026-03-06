@@ -9943,7 +9943,7 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
                            || (&shader == &gSSRAlphaProgram)
                            || (&shader == &gSkinnedSSRAlphaProgram)
                            || (&shader == &gSSRWaterProgram)
-                           || mInForwardAlphaPass;
+                           || (mInForwardAlphaPass && &shader != &gWaterProgram);
 
         channel = shader.enableTexture(LLShaderMgr::SCENE_MAP);
         if (channel > -1)

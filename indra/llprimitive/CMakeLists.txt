@@ -9,7 +9,6 @@ include(LLPhysicsExtensions)
 include(LLPrimitive)
 include(GLM)
 include(Mikktspace)
-include(TinyGLTF)
 
 set(llprimitive_SOURCE_FILES
     gltf/accessor.cpp
@@ -45,7 +44,6 @@ set(llprimitive_HEADER_FILES
     lldaeloader.h
     llgltfloader.h
     llgltfmaterial.h
-    llgltfmaterial_templates.h
     legacy_object_types.h
     llmaterial.h
     llmaterialid.h

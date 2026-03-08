@@ -61,8 +61,8 @@
 #include "llviewertexturelist.h"
 #include "llfloaterperms.h"
 
-#include "tinygltf/tiny_gltf.h"
-#include "lltinygltfhelper.h"
+#include "llgltfhelper.h"
+#include "gltf/asset.h"
 
 #include <boost/iostreams/device/array.hpp>
 #include <boost/iostreams/stream.hpp>
@@ -1258,15 +1258,11 @@ bool LLMaterialEditor::decodeAsset(const std::vector<char>& buffer)
                 {
                     std::string data = asset["data"];
 
-                    tinygltf::TinyGLTF gltf;
-                    tinygltf::TinyGLTF loader;
-                    std::string        error_msg;
-                    std::string        warn_msg;
-
-                    tinygltf::Model model_in;
-
-                    if (loader.LoadASCIIFromString(&model_in, &error_msg, &warn_msg, data.c_str(), static_cast<unsigned int>(data.length()), ""))
+                    try
                     {
+                        LL::GLTF::Asset gltf_asset;
+                        boost::json::value doc = boost::json::parse(data);
+                        gltf_asset = LL::GLTF::Asset(doc);
                         // assets are only supposed to have one item
                         // *NOTE: This duplicates some functionality from
                         // LLGLTFMaterial::fromJSON, but currently does the job
@@ -1274,13 +1270,11 @@ bool LLMaterialEditor::decodeAsset(const std::vector<char>& buffer)
                         // However, LLGLTFMaterial::asJSON should always be
                         // used when uploading materials, to ensure the
                         // asset is valid.
-                        return setFromGltfModel(model_in, 0, true);
+                        return setFromGltfModel(gltf_asset, 0, true);
                     }
-                    else
+                    catch (const boost::system::system_error& e)
                     {
-                        LL_WARNS("MaterialEditor") << "Floater " << getKey() << " Failed to decode material asset: " << LL_NEWLINE
-                         << warn_msg << LL_NEWLINE
-                         << error_msg << LL_ENDL;
+                        LL_WARNS("MaterialEditor") << "Floater " << getKey() << " Failed to decode material asset: " << e.what() << LL_ENDL;
                     }
                 }
             }
@@ -1907,7 +1901,7 @@ static void pack_textures(
 
 void LLMaterialEditor::uploadMaterialFromModel(
     const std::string& filename,
-    tinygltf::Model& model_in,
+    LL::GLTF::Asset& asset,
     S32 index,
     const LLUUID& dest)
 {
@@ -1916,13 +1910,13 @@ void LLMaterialEditor::uploadMaterialFromModel(
         return;
     }
 
-    if (model_in.materials.empty())
+    if (asset.mMaterials.empty())
     {
         // materials are missing
         return;
     }
 
-    if (index >= 0 && model_in.materials.size() <= index)
+    if (index >= 0 && asset.mMaterials.size() <= (size_t)index)
     {
         // material is missing
         return;
@@ -1933,7 +1927,7 @@ void LLMaterialEditor::uploadMaterialFromModel(
     // instead of fighting for a single instance.
     LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor", LLSD().with("filename", filename).with("index", LLSD::Integer(index)));
     me->mUploadFolder = dest;
-    me->loadMaterial(model_in, filename, index, false);
+    me->loadMaterial(asset, filename, index, false);
     me->saveIfNeeded();
 }
 
@@ -1942,26 +1936,8 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
 
-    tinygltf::TinyGLTF loader;
-    std::string        error_msg;
-    std::string        warn_msg;
-
-    bool loaded = false;
-    tinygltf::Model model_in;
-
-    std::string filename_lc = filename;
-    LLStringUtil::toLower(filename_lc);
-
-    // Load a tinygltf model fom a file. Assumes that the input filename has already been
-    // been sanitized to one of (.gltf , .glb) extensions, so does a simple find to distinguish.
-    if (std::string::npos == filename_lc.rfind(".gltf"))
-    {  // file is binary
-        loaded = loader.LoadBinaryFromFile(&model_in, &error_msg, &warn_msg, filename);
-    }
-    else
-    {  // file is ascii
-        loaded = loader.LoadASCIIFromFile(&model_in, &error_msg, &warn_msg, filename);
-    }
+    LL::GLTF::Asset model_in;
+    bool loaded = LLGLTFHelper::loadModel(filename, model_in);
 
     if (!loaded)
     {
@@ -1969,14 +1945,14 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
         return;
     }
 
-    if (model_in.materials.empty())
+    if (model_in.mMaterials.empty())
     {
         // materials are missing
         LLNotificationsUtil::add("CannotUploadMaterial");
         return;
     }
 
-    if (index >= 0 && model_in.materials.size() <= index)
+    if (index >= 0 && model_in.mMaterials.size() <= (size_t)index)
     {
         // material is missing
         LLNotificationsUtil::add("CannotUploadMaterial");
@@ -1990,7 +1966,7 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
         me->mUploadFolder = dest_folder;
         me->loadMaterial(model_in, filename, index);
     }
-    else if (model_in.materials.size() == 1)
+    else if (model_in.mMaterials.size() == 1)
     {
         // Only one material, just load it
         LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor");
@@ -2001,12 +1977,9 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
     {
         // Multiple materials, Promt user to select material
         std::list<std::string> material_list;
-        std::vector<tinygltf::Material>::const_iterator mat_iter = model_in.materials.begin();
-        std::vector<tinygltf::Material>::const_iterator mat_end = model_in.materials.end();
-
-        for (; mat_iter != mat_end; mat_iter++)
+        for (const auto& mat : model_in.mMaterials)
         {
-            std::string mat_name = mat_iter->name;
+            std::string mat_name = mat.mName;
             if (mat_name.empty())
             {
                 material_list.push_back("Material " + std::to_string(material_list.size()));
@@ -2446,44 +2419,40 @@ void LLMaterialEditor::onSaveObjectsMaterialAsMsgCallback(const LLSD& notificati
 
 void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type, bool allow_2k, const LLUUID& dest);
 
-void LLMaterialEditor::loadMaterial(const tinygltf::Model &model_in, const std::string &filename, S32 index, bool open_floater)
+void LLMaterialEditor::loadMaterial(const LL::GLTF::Asset& model_in, const std::string& filename, S32 index, bool open_floater)
 {
-    if (index == model_in.materials.size())
+    if ((size_t)index == model_in.mMaterials.size())
     {
         // bulk upload all the things
         upload_bulk({ filename }, LLFilePicker::FFLOAD_MATERIAL, true, mUploadFolder);
         return;
     }
 
-    if (model_in.materials.size() <= index)
+    if (model_in.mMaterials.size() <= (size_t)index)
     {
         return;
     }
     std::string folder = gDirUtilp->getDirName(filename);
 
-    tinygltf::Material material_in = model_in.materials[index];
-
-    tinygltf::Model  model_out;
-    model_out.asset.version = "2.0";
-    model_out.materials.resize(1);
+    const auto& material_in = model_in.mMaterials[index];
 
     // get base color texture
-    LLPointer<LLImageRaw> base_color_img = LLTinyGLTFHelper::getTexture(folder, model_in, material_in.pbrMetallicRoughness.baseColorTexture.index, mBaseColorName);
+    LLPointer<LLImageRaw> base_color_img = LLGLTFHelper::getTexture(folder, model_in, material_in.mPbrMetallicRoughness.mBaseColorTexture.mIndex, mBaseColorName);
     // get normal map
-    LLPointer<LLImageRaw> normal_img = LLTinyGLTFHelper::getTexture(folder, model_in, material_in.normalTexture.index, mNormalName);
+    LLPointer<LLImageRaw> normal_img = LLGLTFHelper::getTexture(folder, model_in, material_in.mNormalTexture.mIndex, mNormalName);
     // get metallic-roughness texture
-    LLPointer<LLImageRaw> mr_img = LLTinyGLTFHelper::getTexture(folder, model_in, material_in.pbrMetallicRoughness.metallicRoughnessTexture.index, mMetallicRoughnessName);
+    LLPointer<LLImageRaw> mr_img = LLGLTFHelper::getTexture(folder, model_in, material_in.mPbrMetallicRoughness.mMetallicRoughnessTexture.mIndex, mMetallicRoughnessName);
     // get emissive texture
-    LLPointer<LLImageRaw> emissive_img = LLTinyGLTFHelper::getTexture(folder, model_in, material_in.emissiveTexture.index, mEmissiveName);
+    LLPointer<LLImageRaw> emissive_img = LLGLTFHelper::getTexture(folder, model_in, material_in.mEmissiveTexture.mIndex, mEmissiveName);
     // get occlusion map if needed
     LLPointer<LLImageRaw> occlusion_img;
-    if (material_in.occlusionTexture.index != material_in.pbrMetallicRoughness.metallicRoughnessTexture.index)
+    if (material_in.mOcclusionTexture.mIndex != material_in.mPbrMetallicRoughness.mMetallicRoughnessTexture.mIndex)
     {
         std::string tmp;
-        occlusion_img = LLTinyGLTFHelper::getTexture(folder, model_in, material_in.occlusionTexture.index, tmp);
+        occlusion_img = LLGLTFHelper::getTexture(folder, model_in, material_in.mOcclusionTexture.mIndex, tmp);
     }
 
-    LLTinyGLTFHelper::initFetchedTextures(material_in, base_color_img, normal_img, mr_img, emissive_img, occlusion_img,
+    LLGLTFHelper::initFetchedTextures(material_in, base_color_img, normal_img, mr_img, emissive_img, occlusion_img,
         mBaseColorFetched, mNormalFetched, mMetallicRoughnessFetched, mEmissiveFetched);
     pack_textures(base_color_img, normal_img, mr_img, emissive_img, occlusion_img,
         mBaseColorJ2C, mNormalJ2C, mMetallicRoughnessJ2C, mEmissiveJ2C);
@@ -2607,22 +2576,26 @@ void LLMaterialEditor::loadMaterial(const tinygltf::Model &model_in, const std::
     }
 }
 
-bool LLMaterialEditor::setFromGltfModel(const tinygltf::Model& model, S32 index, bool set_textures)
+bool LLMaterialEditor::setFromGltfModel(const LL::GLTF::Asset& asset, S32 index, bool set_textures)
 {
-    if (model.materials.size() > index)
+    if (asset.mMaterials.size() > (size_t)index)
     {
-        const tinygltf::Material& material_in = model.materials[index];
+        const auto& material_in = asset.mMaterials[index];
 
         if (set_textures)
         {
-            S32 index;
+            S32 tex_idx;
             LLUUID id;
 
             // get base color texture
-            index = material_in.pbrMetallicRoughness.baseColorTexture.index;
-            if (index >= 0)
+            tex_idx = material_in.mPbrMetallicRoughness.mBaseColorTexture.mIndex;
+            if (tex_idx >= 0 && (size_t)tex_idx < asset.mTextures.size())
             {
-                id.set(model.images[index].uri);
+                S32 src = asset.mTextures[tex_idx].mSource;
+                if (src >= 0 && (size_t)src < asset.mImages.size())
+                {
+                    id.set(asset.mImages[src].mUri);
+                }
                 setBaseColorId(id);
             }
             else
@@ -2631,10 +2604,14 @@ bool LLMaterialEditor::setFromGltfModel(const tinygltf::Model& model, S32 index,
             }
 
             // get normal map
-            index = material_in.normalTexture.index;
-            if (index >= 0)
+            tex_idx = material_in.mNormalTexture.mIndex;
+            if (tex_idx >= 0 && (size_t)tex_idx < asset.mTextures.size())
             {
-                id.set(model.images[index].uri);
+                S32 src = asset.mTextures[tex_idx].mSource;
+                if (src >= 0 && (size_t)src < asset.mImages.size())
+                {
+                    id.set(asset.mImages[src].mUri);
+                }
                 setNormalId(id);
             }
             else
@@ -2643,10 +2620,14 @@ bool LLMaterialEditor::setFromGltfModel(const tinygltf::Model& model, S32 index,
             }
 
             // get metallic-roughness texture
-            index = material_in.pbrMetallicRoughness.metallicRoughnessTexture.index;
-            if (index >= 0)
+            tex_idx = material_in.mPbrMetallicRoughness.mMetallicRoughnessTexture.mIndex;
+            if (tex_idx >= 0 && (size_t)tex_idx < asset.mTextures.size())
             {
-                id.set(model.images[index].uri);
+                S32 src = asset.mTextures[tex_idx].mSource;
+                if (src >= 0 && (size_t)src < asset.mImages.size())
+                {
+                    id.set(asset.mImages[src].mUri);
+                }
                 setMetallicRoughnessId(id);
             }
             else
@@ -2655,10 +2636,14 @@ bool LLMaterialEditor::setFromGltfModel(const tinygltf::Model& model, S32 index,
             }
 
             // get emissive texture
-            index = material_in.emissiveTexture.index;
-            if (index >= 0)
+            tex_idx = material_in.mEmissiveTexture.mIndex;
+            if (tex_idx >= 0 && (size_t)tex_idx < asset.mTextures.size())
             {
-                id.set(model.images[index].uri);
+                S32 src = asset.mTextures[tex_idx].mSource;
+                if (src >= 0 && (size_t)src < asset.mImages.size())
+                {
+                    id.set(asset.mImages[src].mUri);
+                }
                 setEmissiveId(id);
             }
             else
@@ -2667,25 +2652,42 @@ bool LLMaterialEditor::setFromGltfModel(const tinygltf::Model& model, S32 index,
             }
         }
 
-        setAlphaMode(material_in.alphaMode);
-        setAlphaCutoff((F32)material_in.alphaCutoff);
+        // Convert alpha mode enum to string
+        std::string alpha_mode;
+        switch (material_in.mAlphaMode)
+        {
+            case LL::GLTF::Material::AlphaMode::MASK:
+                alpha_mode = "MASK";
+                break;
+            case LL::GLTF::Material::AlphaMode::BLEND:
+                alpha_mode = "BLEND";
+                break;
+            case LL::GLTF::Material::AlphaMode::OPAQUE:
+            default:
+                alpha_mode = "OPAQUE";
+                break;
+        }
+        setAlphaMode(alpha_mode);
+        setAlphaCutoff((F32)material_in.mAlphaCutoff);
 
-        setBaseColor(LLTinyGLTFHelper::getColor(material_in.pbrMetallicRoughness.baseColorFactor));
-        setEmissiveColor(LLTinyGLTFHelper::getColor(material_in.emissiveFactor));
+        const auto& bcf = material_in.mPbrMetallicRoughness.mBaseColorFactor;
+        setBaseColor(LLColor4((F32)bcf.x, (F32)bcf.y, (F32)bcf.z, (F32)bcf.w));
+        const auto& ef = material_in.mEmissiveFactor;
+        setEmissiveColor(LLColor4((F32)ef.x, (F32)ef.y, (F32)ef.z, 1.0f));
 
-        setMetalnessFactor((F32)material_in.pbrMetallicRoughness.metallicFactor);
-        setRoughnessFactor((F32)material_in.pbrMetallicRoughness.roughnessFactor);
+        setMetalnessFactor((F32)material_in.mPbrMetallicRoughness.mMetallicFactor);
+        setRoughnessFactor((F32)material_in.mPbrMetallicRoughness.mRoughnessFactor);
 
-        setDoubleSided(material_in.doubleSided);
+        setDoubleSided(material_in.mDoubleSided);
     }
 
     return true;
 }
 
 /**
- * Build a texture name from the contents of the (in tinyGLFT parlance)
- * Image URI. This often is filepath to the original image on the users'
- *  local file system.
+ * Build a texture name from the contents of the GLTF Image URI.
+ * This often is filepath to the original image on the users'
+ * local file system.
  */
 const std::string LLMaterialEditor::getImageNameFromUri(std::string image_uri, const std::string texture_type)
 {
@@ -2760,7 +2762,7 @@ const std::string LLMaterialEditor::getImageNameFromUri(std::string image_uri, c
  * the name of the material, a material description and the names of the
  * composite textures.
  */
-void LLMaterialEditor::setFromGltfMetaData(const std::string& filename, const tinygltf::Model& model, S32 index)
+void LLMaterialEditor::setFromGltfMetaData(const std::string& filename, const LL::GLTF::Asset& asset, S32 index)
 {
     // Use the name (without any path/extension) of the file that was
     // uploaded as the base of the material name. Then if the name of the
@@ -2775,16 +2777,16 @@ void LLMaterialEditor::setFromGltfMetaData(const std::string& filename, const ti
     // generic name like "Scene" or "Default" so using this in the name
     // is less useful than you might imagine.
     std::string material_name;
-    if (model.materials.size() > index && !model.materials[index].name.empty())
+    if (asset.mMaterials.size() > (size_t)index && !asset.mMaterials[index].mName.empty())
     {
-        material_name = model.materials[index].name;
+        material_name = asset.mMaterials[index].mName;
     }
-    else if (model.scenes.size() > 0)
+    else if (asset.mScenes.size() > 0)
     {
-        const tinygltf::Scene& scene_in = model.scenes[0];
-        if (scene_in.name.length())
+        const auto& scene_in = asset.mScenes[0];
+        if (scene_in.mName.length())
         {
-            material_name = scene_in.name;
+            material_name = scene_in.mName;
         }
         else
         {
@@ -2831,50 +2833,69 @@ void LLMaterialEditor::setFromGltfMetaData(const std::string& filename, const ti
 
     /**
      * Extract / derive the names of each composite texture. For each, the
-     * index is used to to determine which of the "Images" is used. If the index
-     * is -1 then that texture type is not present in the material (Seems to be
-     * quite common that a material is missing 1 or more types of texture)
+     * texture index is resolved through the textures array to find the
+     * source image. If the index is -1 then that texture type is not present
+     * in the material (quite common that a material is missing 1 or more
+     * types of texture).
      */
-    if (model.materials.size() > index)
+    if (asset.mMaterials.size() > (size_t)index)
     {
-        const tinygltf::Material& first_material = model.materials[index];
+        const auto& first_material = asset.mMaterials[index];
+
+        // Helper lambda to resolve a texture index to an image URI
+        auto getImageUri = [&asset](S32 tex_idx) -> std::string
+        {
+            if (tex_idx >= 0 && (size_t)tex_idx < asset.mTextures.size())
+            {
+                S32 src = asset.mTextures[tex_idx].mSource;
+                if (src >= 0 && (size_t)src < asset.mImages.size())
+                {
+                    return asset.mImages[src].mUri;
+                }
+            }
+            return std::string();
+        };
 
         mBaseColorName = MATERIAL_BASE_COLOR_DEFAULT_NAME;
         // note: unlike the other textures, base color doesn't have its own entry
-        // in the tinyGLTF Material struct. Rather, it is taken from a
+        // at the top level of the Material struct. Rather, it is taken from a
         // sub-texture in the pbrMetallicRoughness member
-        int index = first_material.pbrMetallicRoughness.baseColorTexture.index;
-        if (index > -1 && index < model.images.size())
+        S32 tex_idx = first_material.mPbrMetallicRoughness.mBaseColorTexture.mIndex;
+        std::string image_uri = getImageUri(tex_idx);
+        if (!image_uri.empty())
         {
             // sanitize the name we decide to use for each texture
-            std::string texture_name = getImageNameFromUri(model.images[index].uri, MATERIAL_BASE_COLOR_DEFAULT_NAME);
+            std::string texture_name = getImageNameFromUri(image_uri, MATERIAL_BASE_COLOR_DEFAULT_NAME);
             LLInventoryObject::correctInventoryName(texture_name);
             mBaseColorName = texture_name;
         }
 
         mEmissiveName = MATERIAL_EMISSIVE_DEFAULT_NAME;
-        index = first_material.emissiveTexture.index;
-        if (index > -1 && index < model.images.size())
+        tex_idx = first_material.mEmissiveTexture.mIndex;
+        image_uri = getImageUri(tex_idx);
+        if (!image_uri.empty())
         {
-            std::string texture_name = getImageNameFromUri(model.images[index].uri, MATERIAL_EMISSIVE_DEFAULT_NAME);
+            std::string texture_name = getImageNameFromUri(image_uri, MATERIAL_EMISSIVE_DEFAULT_NAME);
             LLInventoryObject::correctInventoryName(texture_name);
             mEmissiveName = texture_name;
         }
 
         mMetallicRoughnessName = MATERIAL_METALLIC_DEFAULT_NAME;
-        index = first_material.pbrMetallicRoughness.metallicRoughnessTexture.index;
-        if (index > -1 && index < model.images.size())
+        tex_idx = first_material.mPbrMetallicRoughness.mMetallicRoughnessTexture.mIndex;
+        image_uri = getImageUri(tex_idx);
+        if (!image_uri.empty())
         {
-            std::string texture_name = getImageNameFromUri(model.images[index].uri, MATERIAL_METALLIC_DEFAULT_NAME);
+            std::string texture_name = getImageNameFromUri(image_uri, MATERIAL_METALLIC_DEFAULT_NAME);
             LLInventoryObject::correctInventoryName(texture_name);
             mMetallicRoughnessName = texture_name;
         }
 
         mNormalName = MATERIAL_NORMAL_DEFAULT_NAME;
-        index = first_material.normalTexture.index;
-        if (index > -1 && index < model.images.size())
+        tex_idx = first_material.mNormalTexture.mIndex;
+        image_uri = getImageUri(tex_idx);
+        if (!image_uri.empty())
         {
-            std::string texture_name = getImageNameFromUri(model.images[index].uri, MATERIAL_NORMAL_DEFAULT_NAME);
+            std::string texture_name = getImageNameFromUri(image_uri, MATERIAL_NORMAL_DEFAULT_NAME);
             LLInventoryObject::correctInventoryName(texture_name);
             mNormalName = texture_name;
         }
@@ -3809,9 +3830,9 @@ void LLMaterialEditor::clearTextures()
 
 void LLMaterialEditor::loadDefaults()
 {
-    tinygltf::Model model_in;
-    model_in.materials.resize(1);
-    setFromGltfModel(model_in, 0, true);
+    LL::GLTF::Asset asset;
+    asset.mMaterials.resize(1);
+    setFromGltfModel(asset, 0, true);
 }
 
 bool LLMaterialEditor::capabilitiesAvailable()

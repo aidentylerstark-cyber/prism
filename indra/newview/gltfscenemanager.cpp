@@ -29,7 +29,6 @@
 #include "gltfscenemanager.h"
 #include "llviewermenufile.h"
 #include "llappviewer.h"
-#include "lltinygltfhelper.h"
 #include "llvertexbuffer.h"
 #include "llselectmgr.h"
 #include "llagent.h"

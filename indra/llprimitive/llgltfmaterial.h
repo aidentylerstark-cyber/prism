@@ -34,16 +34,11 @@
 #include "lluuid.h"
 #include "hbxxh.h"
 
+#include <boost/json.hpp>
+
 #include <array>
 #include <string>
 #include <map>
-
-namespace tinygltf
-{
-    class Model;
-    struct TextureInfo;
-    class Value;
-}
 
 class LLTextureEntry;
 
@@ -167,20 +162,12 @@ public:
     // returns true if successful
     // if unsuccessful, the contents of this LLGLTFMaterial should be left unchanged and false is returned
     // json - the json text to load from
-    // warn_msg - warning message from TinyGLTF if any
-    // error_msg - error_msg from TinyGLTF if any
+    // warn_msg - warning message if any
+    // error_msg - error message if any
     bool fromJSON(const std::string& json, std::string& warn_msg, std::string& error_msg);
 
     // get the contents of this LLGLTFMaterial as a json string
     std::string asJSON(bool prettyprint = false) const;
-
-    // initialize from given tinygltf::Model
-    // model - the model to reference
-    // mat_index - index of material in model's material array
-    void setFromModel(const tinygltf::Model& model, S32 mat_index);
-
-    // write to given tinygltf::Model
-    void writeToModel(tinygltf::Model& model, S32 mat_index) const;
 
     virtual void applyOverride(const LLGLTFMaterial& override_mat);
 
@@ -231,21 +218,20 @@ public:
                                              F32& tex_offset_s, F32& tex_offset_t,
                                              F32& tex_rotation);
 protected:
-    static LLVector2 vec2FromJson(const std::map<std::string, tinygltf::Value>& object, const char* key, const LLVector2& default_value);
-    static F32 floatFromJson(const std::map<std::string, tinygltf::Value>& object, const char* key, const F32 default_value);
-
-    template<typename T>
-    static void allocateTextureImage(tinygltf::Model& model, T& texture_info, const std::string& uri);
-
-    template<typename T>
-    void setFromTexture(const tinygltf::Model& model, const T& texture_info, TextureInfo texture_info_id);
-    template<typename T>
-    static void setFromTexture(const tinygltf::Model& model, const T& texture_info, LLUUID& texture_id, TextureTransform& transform);
-
-    template<typename T>
-    void writeToTexture(tinygltf::Model& model, T& texture_info, TextureInfo texture_info_id, bool force_write = false) const;
-    template<typename T>
-    static void writeToTexture(tinygltf::Model& model, T& texture_info, const LLUUID& texture_id, const TextureTransform& transform, bool force_write = false);
+    // Parse from glTF JSON document
+    bool setFromDocument(const boost::json::value& doc, S32 mat_index);
+    // Serialize to glTF JSON document
+    boost::json::value writeDocument() const;
+    // Resolve texture index -> textures[].source -> images[].uri
+    static std::string getTextureURI(const boost::json::value& doc, S32 texture_index);
+    // Read texture info from JSON
+    void readTextureInfo(const boost::json::value& doc, const boost::json::object& tex_info, TextureInfo id);
+    static void readTextureInfo(const boost::json::value& doc, const boost::json::object& tex_info, LLUUID& texture_id, TextureTransform& transform);
+    // Write texture entry to JSON arrays
+    static void writeTextureEntry(boost::json::array& images, boost::json::array& textures, boost::json::object& dst, const char* key, const LLUUID& texture_id, const TextureTransform& transform, bool force_write = false);
+    // JSON helpers
+    static LLVector2 vec2FromJson(const boost::json::object& obj, const char* key, const LLVector2& default_value);
+    static F32 floatFromJson(const boost::json::object& obj, const char* key, F32 default_value);
 
     // Used to update the digest of the mTrackingIdToLocalTexture map each time
     // it is changed; this way, that digest can be used by the fast getHash()

@@ -31,9 +31,7 @@
 
 #include "llsdserialize.h"
 
-// NOTE -- this should be the one and only place tiny_gltf.h is included
-#include "tinygltf/tiny_gltf.h"
-#include "llgltfmaterial_templates.h"
+#include <boost/json.hpp>
 
 const char* const LLGLTFMaterial::ASSET_VERSION = "1.1";
 const char* const LLGLTFMaterial::ASSET_TYPE = "GLTF 2.0";
@@ -185,188 +183,441 @@ bool LLGLTFMaterial::operator==(const LLGLTFMaterial& rhs) const
 bool LLGLTFMaterial::fromJSON(const std::string& json, std::string& warn_msg, std::string& error_msg)
 {
     LL_PROFILE_ZONE_SCOPED;
-    tinygltf::TinyGLTF gltf;
-
-    tinygltf::Model model_in;
-
-    if (gltf.LoadASCIIFromString(&model_in, &error_msg, &warn_msg, json.c_str(), static_cast<unsigned int>(json.length()), ""))
+    try
     {
-        setFromModel(model_in, 0);
-
-        return true;
+        boost::json::value doc = boost::json::parse(json);
+        return setFromDocument(doc, 0);
     }
-
-    return false;
+    catch (const boost::system::system_error& e)
+    {
+        error_msg = e.what();
+        return false;
+    }
 }
 
 std::string LLGLTFMaterial::asJSON(bool prettyprint) const
 {
     LL_PROFILE_ZONE_SCOPED;
-    tinygltf::TinyGLTF gltf;
-
-    tinygltf::Model model_out;
-
-    std::ostringstream str;
-
-    writeToModel(model_out, 0);
-
-    // To ensure consistency in asset upload, this should be the only reference
-    // to WriteGltfSceneToStream in the viewer.
-    gltf.WriteGltfSceneToStream(&model_out, str, prettyprint, false);
-
-    return std::move(str).str();
+    boost::json::value doc = writeDocument();
+    return boost::json::serialize(doc);
 }
 
-void LLGLTFMaterial::setFromModel(const tinygltf::Model& model, S32 mat_index)
+// static
+std::string LLGLTFMaterial::getTextureURI(const boost::json::value& doc, S32 texture_index)
+{
+    if (texture_index < 0) return "";
+
+    const auto* textures = doc.if_object() ? doc.as_object().if_contains("textures") : nullptr;
+    if (!textures || !textures->is_array()) return "";
+
+    const auto& tex_arr = textures->as_array();
+    if ((size_t)texture_index >= tex_arr.size()) return "";
+
+    const auto& tex = tex_arr[(size_t)texture_index];
+    if (!tex.is_object()) return "";
+
+    const auto* source_val = tex.as_object().if_contains("source");
+    if (!source_val || !source_val->is_int64()) return "";
+
+    S32 source_idx = (S32)source_val->as_int64();
+    if (source_idx < 0) return "";
+
+    const auto* images = doc.as_object().if_contains("images");
+    if (!images || !images->is_array()) return "";
+
+    const auto& img_arr = images->as_array();
+    if ((size_t)source_idx >= img_arr.size()) return "";
+
+    const auto& img = img_arr[(size_t)source_idx];
+    if (!img.is_object()) return "";
+
+    const auto* uri_val = img.as_object().if_contains("uri");
+    if (!uri_val || !uri_val->is_string()) return "";
+
+    return std::string(uri_val->as_string());
+}
+
+// static
+void LLGLTFMaterial::readTextureInfo(const boost::json::value& doc, const boost::json::object& tex_info, LLUUID& texture_id, TextureTransform& transform)
 {
     LL_PROFILE_ZONE_SCOPED;
-    if (model.materials.size() <= mat_index)
+    const auto* index_val = tex_info.if_contains("index");
+    if (!index_val || !index_val->is_int64()) return;
+
+    S32 tex_idx = (S32)index_val->as_int64();
+    std::string uri = getTextureURI(doc, tex_idx);
+    texture_id.set(uri);
+
+    const auto* extensions_val = tex_info.if_contains("extensions");
+    if (extensions_val && extensions_val->is_object())
+    {
+        const auto& extensions = extensions_val->as_object();
+        const auto* transform_val = extensions.if_contains(GLTF_FILE_EXTENSION_TRANSFORM);
+        if (transform_val && transform_val->is_object())
+        {
+            const auto& transform_obj = transform_val->as_object();
+            transform.mOffset = vec2FromJson(transform_obj, GLTF_FILE_EXTENSION_TRANSFORM_OFFSET, getDefaultTextureOffset());
+            transform.mScale = vec2FromJson(transform_obj, GLTF_FILE_EXTENSION_TRANSFORM_SCALE, getDefaultTextureScale());
+            transform.mRotation = floatFromJson(transform_obj, GLTF_FILE_EXTENSION_TRANSFORM_ROTATION, getDefaultTextureRotation());
+        }
+    }
+}
+
+void LLGLTFMaterial::readTextureInfo(const boost::json::value& doc, const boost::json::object& tex_info, TextureInfo id)
+{
+    readTextureInfo(doc, tex_info, mTextureId[id], mTextureTransform[id]);
+}
+
+bool LLGLTFMaterial::setFromDocument(const boost::json::value& doc, S32 mat_index)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    if (!doc.is_object()) return false;
+
+    const auto& root = doc.as_object();
+    const auto* materials_val = root.if_contains("materials");
+    if (!materials_val || !materials_val->is_array()) return false;
+
+    const auto& materials = materials_val->as_array();
+    if ((size_t)mat_index >= materials.size()) return false;
+
+    const auto& mat = materials[(size_t)mat_index];
+    if (!mat.is_object()) return false;
+
+    const auto& mat_obj = mat.as_object();
+
+    // PBR metallic roughness
+    const auto* pbr_val = mat_obj.if_contains("pbrMetallicRoughness");
+    if (pbr_val && pbr_val->is_object())
+    {
+        const auto& pbr = pbr_val->as_object();
+
+        const auto* base_color_tex = pbr.if_contains("baseColorTexture");
+        if (base_color_tex && base_color_tex->is_object())
+        {
+            readTextureInfo(doc, base_color_tex->as_object(), GLTF_TEXTURE_INFO_BASE_COLOR);
+        }
+
+        const auto* mr_tex = pbr.if_contains("metallicRoughnessTexture");
+        if (mr_tex && mr_tex->is_object())
+        {
+            readTextureInfo(doc, mr_tex->as_object(), GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS);
+        }
+
+        const auto* bcf = pbr.if_contains("baseColorFactor");
+        if (bcf && bcf->is_array())
+        {
+            const auto& arr = bcf->as_array();
+            if (arr.size() >= 4)
+            {
+                mBaseColor.set(
+                    (F32)arr[0].to_number<double>(),
+                    (F32)arr[1].to_number<double>(),
+                    (F32)arr[2].to_number<double>(),
+                    (F32)arr[3].to_number<double>());
+            }
+        }
+
+        const auto* mf = pbr.if_contains("metallicFactor");
+        if (mf && mf->is_number())
+        {
+            mMetallicFactor = llclamp((F32)mf->to_number<double>(), 0.f, 1.f);
+        }
+
+        const auto* rf = pbr.if_contains("roughnessFactor");
+        if (rf && rf->is_number())
+        {
+            mRoughnessFactor = llclamp((F32)rf->to_number<double>(), 0.f, 1.f);
+        }
+    }
+
+    // Normal texture
+    const auto* normal_tex = mat_obj.if_contains("normalTexture");
+    if (normal_tex && normal_tex->is_object())
+    {
+        readTextureInfo(doc, normal_tex->as_object(), GLTF_TEXTURE_INFO_NORMAL);
+    }
+
+    // Emissive texture
+    const auto* emissive_tex = mat_obj.if_contains("emissiveTexture");
+    if (emissive_tex && emissive_tex->is_object())
+    {
+        readTextureInfo(doc, emissive_tex->as_object(), GLTF_TEXTURE_INFO_EMISSIVE);
+    }
+
+    // Alpha mode
+    const auto* am = mat_obj.if_contains("alphaMode");
+    if (am && am->is_string())
+    {
+        setAlphaMode(std::string(am->as_string()));
+    }
+
+    // Alpha cutoff
+    const auto* ac = mat_obj.if_contains("alphaCutoff");
+    if (ac && ac->is_number())
+    {
+        mAlphaCutoff = llclamp((F32)ac->to_number<double>(), 0.f, 1.f);
+    }
+
+    // Emissive factor
+    const auto* ef = mat_obj.if_contains("emissiveFactor");
+    if (ef && ef->is_array())
+    {
+        const auto& arr = ef->as_array();
+        if (arr.size() >= 3)
+        {
+            mEmissiveColor.set(
+                (F32)arr[0].to_number<double>(),
+                (F32)arr[1].to_number<double>(),
+                (F32)arr[2].to_number<double>());
+        }
+    }
+
+    // Double sided
+    const auto* ds = mat_obj.if_contains("doubleSided");
+    if (ds && ds->is_bool())
+    {
+        mDoubleSided = ds->as_bool();
+    }
+
+    // Extras
+    const auto* extras_val = mat_obj.if_contains("extras");
+    if (extras_val && extras_val->is_object())
+    {
+        const auto& extras = extras_val->as_object();
+        const auto* override_am = extras.if_contains("override_alpha_mode");
+        if (override_am && override_am->is_bool())
+        {
+            mOverrideAlphaMode = override_am->as_bool();
+        }
+
+        const auto* override_ds = extras.if_contains("override_double_sided");
+        if (override_ds && override_ds->is_bool())
+        {
+            mOverrideDoubleSided = override_ds->as_bool();
+        }
+    }
+
+    return true;
+}
+
+// static
+LLVector2 LLGLTFMaterial::vec2FromJson(const boost::json::object& obj, const char* key, const LLVector2& default_value)
+{
+    const auto* val = obj.if_contains(key);
+    if (!val || !val->is_array()) return default_value;
+
+    const auto& arr = val->as_array();
+    if (arr.size() < LENGTHOFVECTOR2) return default_value;
+
+    LLVector2 result;
+    for (U32 i = 0; i < LENGTHOFVECTOR2; ++i)
+    {
+        if (!arr[i].is_number()) return default_value;
+        result.mV[i] = (F32)arr[i].to_number<double>();
+    }
+    return result;
+}
+
+// static
+F32 LLGLTFMaterial::floatFromJson(const boost::json::object& obj, const char* key, F32 default_value)
+{
+    const auto* val = obj.if_contains(key);
+    if (!val || !val->is_number()) return default_value;
+    return (F32)val->to_number<double>();
+}
+
+// static
+void LLGLTFMaterial::writeTextureEntry(boost::json::array& images, boost::json::array& textures, boost::json::object& dst, const char* key, const LLUUID& texture_id, const TextureTransform& transform, bool force_write)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    const bool is_blank_transform = transform == sDefault.mTextureTransform[0];
+    if (!force_write && texture_id.isNull() && is_blank_transform)
     {
         return;
     }
 
-    const tinygltf::Material& material_in = model.materials[mat_index];
+    // Add image entry
+    S32 image_idx = (S32)images.size();
+    boost::json::object image_obj;
+    image_obj["uri"] = texture_id.asString();
+    images.push_back(image_obj);
 
-    // Apply base color texture
-    setFromTexture(model, material_in.pbrMetallicRoughness.baseColorTexture, GLTF_TEXTURE_INFO_BASE_COLOR);
-    // Apply normal map
-    setFromTexture(model, material_in.normalTexture, GLTF_TEXTURE_INFO_NORMAL);
-    // Apply metallic-roughness texture
-    setFromTexture(model, material_in.pbrMetallicRoughness.metallicRoughnessTexture, GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS);
-    // Apply emissive texture
-    setFromTexture(model, material_in.emissiveTexture, GLTF_TEXTURE_INFO_EMISSIVE);
+    // Add texture entry
+    S32 texture_idx = (S32)textures.size();
+    boost::json::object tex_obj;
+    tex_obj["source"] = image_idx;
+    textures.push_back(tex_obj);
 
-    setAlphaMode(material_in.alphaMode);
-    mAlphaCutoff = llclamp((F32)material_in.alphaCutoff, 0.f, 1.f);
+    // Build texture info
+    boost::json::object tex_info;
+    tex_info["index"] = texture_idx;
 
-    mBaseColor.set(material_in.pbrMetallicRoughness.baseColorFactor);
-    mEmissiveColor.set(material_in.emissiveFactor);
-
-    mMetallicFactor = llclamp((F32)material_in.pbrMetallicRoughness.metallicFactor, 0.f, 1.f);
-    mRoughnessFactor = llclamp((F32)material_in.pbrMetallicRoughness.roughnessFactor, 0.f, 1.f);
-
-    mDoubleSided = material_in.doubleSided;
-
-    if (material_in.extras.IsObject())
+    if (!is_blank_transform)
     {
-        tinygltf::Value::Object extras = material_in.extras.Get<tinygltf::Value::Object>();
-        const auto& alpha_mode = extras.find("override_alpha_mode");
-        if (alpha_mode != extras.end())
-        {
-            mOverrideAlphaMode = alpha_mode->second.Get<bool>();
-        }
+        boost::json::object transform_obj;
+        transform_obj[GLTF_FILE_EXTENSION_TRANSFORM_OFFSET] = boost::json::array({
+            boost::json::value(transform.mOffset.mV[VX]),
+            boost::json::value(transform.mOffset.mV[VY])
+        });
+        transform_obj[GLTF_FILE_EXTENSION_TRANSFORM_SCALE] = boost::json::array({
+            boost::json::value(transform.mScale.mV[VX]),
+            boost::json::value(transform.mScale.mV[VY])
+        });
+        transform_obj[GLTF_FILE_EXTENSION_TRANSFORM_ROTATION] = transform.mRotation;
 
-        const auto& double_sided = extras.find("override_double_sided");
-        if (double_sided != extras.end())
-        {
-            mOverrideDoubleSided = double_sided->second.Get<bool>();
-        }
+        boost::json::object extensions;
+        extensions[GLTF_FILE_EXTENSION_TRANSFORM] = transform_obj;
+        tex_info["extensions"] = extensions;
     }
+
+    dst[key] = tex_info;
 }
 
-// static
-LLVector2 LLGLTFMaterial::vec2FromJson(const tinygltf::Value::Object& object, const char* key, const LLVector2& default_value)
-{
-    const auto it = object.find(key);
-    if (it == object.end())
-    {
-        return default_value;
-    }
-    const tinygltf::Value& vec2_json = std::get<1>(*it);
-    if (!vec2_json.IsArray() || vec2_json.ArrayLen() < LENGTHOFVECTOR2)
-    {
-        return default_value;
-    }
-    LLVector2 value;
-    for (U32 i = 0; i < LENGTHOFVECTOR2; ++i)
-    {
-        const tinygltf::Value& real_json = vec2_json.Get(i);
-        if (!real_json.IsReal())
-        {
-            return default_value;
-        }
-        value.mV[i] = (F32)real_json.Get<double>();
-    }
-    return value;
-}
-
-// static
-F32 LLGLTFMaterial::floatFromJson(const tinygltf::Value::Object& object, const char* key, const F32 default_value)
-{
-    const auto it = object.find(key);
-    if (it == object.end())
-    {
-        return default_value;
-    }
-    const tinygltf::Value& real_json = std::get<1>(*it);
-    if (!real_json.IsReal())
-    {
-        return default_value;
-    }
-    return (F32)real_json.GetNumberAsDouble();
-}
-
-void LLGLTFMaterial::writeToModel(tinygltf::Model& model, S32 mat_index) const
+boost::json::value LLGLTFMaterial::writeDocument() const
 {
     LL_PROFILE_ZONE_SCOPED;
-    if (model.materials.size() < mat_index+1)
+    boost::json::object root;
+
+    // Asset info
+    boost::json::object asset;
+    asset["version"] = "2.0";
+    root["asset"] = asset;
+
+    boost::json::array images;
+    boost::json::array textures;
+
+    // Build material
+    boost::json::object mat_obj;
+
+    // PBR metallic roughness
+    boost::json::object pbr;
+    bool has_pbr = false;
+
+    // Base color texture
+    writeTextureEntry(images, textures, pbr, "baseColorTexture",
+        mTextureId[GLTF_TEXTURE_INFO_BASE_COLOR], mTextureTransform[GLTF_TEXTURE_INFO_BASE_COLOR]);
+    if (pbr.contains("baseColorTexture")) has_pbr = true;
+
+    // Metallic roughness texture
+    writeTextureEntry(images, textures, pbr, "metallicRoughnessTexture",
+        mTextureId[GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS], mTextureTransform[GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS]);
+    if (pbr.contains("metallicRoughnessTexture")) has_pbr = true;
+
+    // Base color factor
+    boost::json::array bcf = {
+        boost::json::value((double)mBaseColor.mV[VRED]),
+        boost::json::value((double)mBaseColor.mV[VGREEN]),
+        boost::json::value((double)mBaseColor.mV[VBLUE]),
+        boost::json::value((double)mBaseColor.mV[VALPHA])
+    };
+    if (mBaseColor != getDefaultBaseColor())
     {
-        model.materials.resize(mat_index + 1);
+        pbr["baseColorFactor"] = bcf;
+        has_pbr = true;
     }
 
-    tinygltf::Material& material_out = model.materials[mat_index];
-
-    // set base color texture
-    writeToTexture(model, material_out.pbrMetallicRoughness.baseColorTexture, GLTF_TEXTURE_INFO_BASE_COLOR);
-    // set normal texture
-    writeToTexture(model, material_out.normalTexture, GLTF_TEXTURE_INFO_NORMAL);
-    // set metallic-roughness texture
-    writeToTexture(model, material_out.pbrMetallicRoughness.metallicRoughnessTexture, GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS);
-    // set emissive texture
-    writeToTexture(model, material_out.emissiveTexture, GLTF_TEXTURE_INFO_EMISSIVE);
-    // set occlusion texture
-    // *NOTE: This is required for ORM materials for GLTF compliance.
-    // See: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#_material_occlusiontexture
-    writeToTexture(model, material_out.occlusionTexture, GLTF_TEXTURE_INFO_OCCLUSION);
-
-
-    material_out.alphaMode = getAlphaMode();
-    material_out.alphaCutoff = mAlphaCutoff;
-
-    mBaseColor.write(material_out.pbrMetallicRoughness.baseColorFactor);
-
-    if (mEmissiveColor != LLGLTFMaterial::getDefaultEmissiveColor())
+    if (mMetallicFactor != getDefaultMetallicFactor())
     {
-        material_out.emissiveFactor.resize(3);
-        mEmissiveColor.write(material_out.emissiveFactor);
+        pbr["metallicFactor"] = (double)mMetallicFactor;
+        has_pbr = true;
     }
 
-    material_out.pbrMetallicRoughness.metallicFactor = mMetallicFactor;
-    material_out.pbrMetallicRoughness.roughnessFactor = mRoughnessFactor;
+    if (mRoughnessFactor != getDefaultRoughnessFactor())
+    {
+        pbr["roughnessFactor"] = (double)mRoughnessFactor;
+        has_pbr = true;
+    }
 
-    material_out.doubleSided = mDoubleSided;
+    if (has_pbr)
+    {
+        // Always write base color factor if we have PBR at all
+        if (!pbr.contains("baseColorFactor"))
+        {
+            pbr["baseColorFactor"] = bcf;
+        }
+        if (!pbr.contains("metallicFactor"))
+        {
+            pbr["metallicFactor"] = (double)mMetallicFactor;
+        }
+        if (!pbr.contains("roughnessFactor"))
+        {
+            pbr["roughnessFactor"] = (double)mRoughnessFactor;
+        }
+        mat_obj["pbrMetallicRoughness"] = pbr;
+    }
 
-    // generate "extras" string
-    tinygltf::Value::Object extras;
+    // Normal texture
+    boost::json::object normal_dst;
+    writeTextureEntry(images, textures, normal_dst, "normalTexture_tmp",
+        mTextureId[GLTF_TEXTURE_INFO_NORMAL], mTextureTransform[GLTF_TEXTURE_INFO_NORMAL]);
+    if (normal_dst.contains("normalTexture_tmp"))
+    {
+        mat_obj["normalTexture"] = normal_dst["normalTexture_tmp"];
+    }
+
+    // Emissive texture
+    boost::json::object emissive_dst;
+    writeTextureEntry(images, textures, emissive_dst, "emissiveTexture_tmp",
+        mTextureId[GLTF_TEXTURE_INFO_EMISSIVE], mTextureTransform[GLTF_TEXTURE_INFO_EMISSIVE]);
+    if (emissive_dst.contains("emissiveTexture_tmp"))
+    {
+        mat_obj["emissiveTexture"] = emissive_dst["emissiveTexture_tmp"];
+    }
+
+    // Occlusion texture (GLTF compliance for ORM)
+    boost::json::object occlusion_dst;
+    writeTextureEntry(images, textures, occlusion_dst, "occlusionTexture_tmp",
+        mTextureId[GLTF_TEXTURE_INFO_OCCLUSION], mTextureTransform[GLTF_TEXTURE_INFO_OCCLUSION]);
+    if (occlusion_dst.contains("occlusionTexture_tmp"))
+    {
+        mat_obj["occlusionTexture"] = occlusion_dst["occlusionTexture_tmp"];
+    }
+
+    mat_obj["alphaMode"] = getAlphaMode();
+    mat_obj["alphaCutoff"] = (double)mAlphaCutoff;
+    mat_obj["doubleSided"] = mDoubleSided;
+
+    if (mEmissiveColor != getDefaultEmissiveColor())
+    {
+        mat_obj["emissiveFactor"] = boost::json::array({
+            boost::json::value((double)mEmissiveColor.mV[0]),
+            boost::json::value((double)mEmissiveColor.mV[1]),
+            boost::json::value((double)mEmissiveColor.mV[2])
+        });
+    }
+
+    // Extras
+    boost::json::object extras;
     bool write_extras = false;
     if (mOverrideAlphaMode && mAlphaMode == getDefaultAlphaMode())
     {
-        extras["override_alpha_mode"] = tinygltf::Value(mOverrideAlphaMode);
+        extras["override_alpha_mode"] = true;
         write_extras = true;
     }
-
     if (mOverrideDoubleSided && mDoubleSided == getDefaultDoubleSided())
     {
-        extras["override_double_sided"] = tinygltf::Value(mOverrideDoubleSided);
+        extras["override_double_sided"] = true;
         write_extras = true;
     }
-
     if (write_extras)
     {
-        material_out.extras = tinygltf::Value(extras);
+        mat_obj["extras"] = extras;
     }
 
-    model.asset.version = "2.0";
+    boost::json::array materials;
+    materials.push_back(mat_obj);
+    root["materials"] = materials;
+
+    if (!images.empty())
+    {
+        root["images"] = images;
+    }
+    if (!textures.empty())
+    {
+        root["textures"] = textures;
+    }
+
+    return root;
 }
 
 void LLGLTFMaterial::sanitizeAssetMaterial()

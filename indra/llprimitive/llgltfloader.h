@@ -27,8 +27,6 @@
 #ifndef LL_LLGLTFLoader_H
 #define LL_LLGLTFLoader_H
 
-#include "tinygltf/tiny_gltf.h"
-
 #include "gltf/asset.h"
 
 #include "llglheaders.h"
@@ -192,7 +190,6 @@ class LLGLTFLoader : public LLModelLoader
 
 protected:
     LL::GLTF::Asset mGLTFAsset;
-    tinygltf::Model mGltfModel;
     bool            mGltfLoaded = false;
     bool            mApplyXYRotation = false;
 

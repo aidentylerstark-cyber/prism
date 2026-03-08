@@ -33,7 +33,7 @@
 #include "llfetchedgltfmaterial.h"
 #include "llfilesystem.h"
 #include "llsdserialize.h"
-#include "lltinygltfhelper.h"
+#include "llgltfhelper.h"
 #include "llviewercontrol.h"
 #include "llviewergenericmessage.h"
 #include "llviewerobjectlist.h"
@@ -43,8 +43,6 @@
 #include "llagent.h"
 #include "llvocache.h"
 #include "llworld.h"
-
-#include "tinygltf/tiny_gltf.h"
 
 #include <boost/iostreams/device/array.hpp>
 #include <boost/iostreams/stream.hpp>
@@ -514,7 +512,7 @@ class AssetLoadUserData
 {
 public:
     AssetLoadUserData() {}
-    tinygltf::Model mModelIn;
+    std::string mData;
     LLPointer<LLFetchedGLTFMaterial> mMaterial;
 };
 
@@ -568,23 +566,7 @@ void LLGLTFMaterialList::onAssetLoadComplete(const LLUUID& id, LLAssetType::ETyp
                         {
                             if (asset.has("data") && asset["data"].isString())
                             {
-                                std::string data = asset["data"];
-
-                                std::string warn_msg, error_msg;
-
-                                LL_PROFILE_ZONE_SCOPED;
-                                tinygltf::TinyGLTF gltf;
-
-                                if (!gltf.LoadASCIIFromString(&asset_data->mModelIn, &error_msg, &warn_msg, data.c_str(), static_cast<U32>(data.length()), ""))
-                                {
-                                    LL_WARNS("GLTF") << "Failed to decode material asset: "
-                                        << LL_NEWLINE
-                                        << warn_msg
-                                        << LL_NEWLINE
-                                        << error_msg
-                                        << LL_ENDL;
-                                    return false;
-                                }
+                                asset_data->mData = asset["data"].asString();
                                 return true;
                             }
                         }
@@ -603,7 +585,12 @@ void LLGLTFMaterialList::onAssetLoadComplete(const LLUUID& id, LLAssetType::ETyp
 
             if (result)
             {
-                asset_data->mMaterial->setFromModel(asset_data->mModelIn, 0/*only one index*/);
+                std::string warn_msg, error_msg;
+                if (!asset_data->mMaterial->fromJSON(asset_data->mData, warn_msg, error_msg))
+                {
+                    LL_WARNS("GLTF") << "Failed to decode material asset: " << error_msg << LL_ENDL;
+                    result = false;
+                }
             }
             else
             {

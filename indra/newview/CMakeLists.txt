@@ -605,7 +605,7 @@ set(viewer_SOURCE_FILES
     lltexturestats.cpp
     lltextureview.cpp
     llthumbnailctrl.cpp
-    lltinygltfhelper.cpp
+    llgltfhelper.cpp
     lltoast.cpp
     lltoastalertpanel.cpp
     lltoastgroupnotifypanel.cpp
@@ -1270,7 +1270,7 @@ set(viewer_HEADER_FILES
     lltexturestats.h
     lltextureview.h
     llthumbnailctrl.h
-    lltinygltfhelper.h
+    llgltfhelper.h
     lltoast.h
     lltoastalertpanel.h
     lltoastgroupnotifypanel.h

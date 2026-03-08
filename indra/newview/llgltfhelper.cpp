@@ -92,6 +92,12 @@ static LLImageRaw* decodeImage(const LL::GLTF::Asset& asset, const LL::GLTF::Ima
         std::string folder = gDirUtilp->getDirName(asset.mFilename);
         std::string filepath = folder + gDirUtilp->getDirDelimiter() + image.mUri;
 
+        if (!gDirUtilp->fileExists(filepath))
+        {
+            // URI might be escaped, unescape
+            filepath = folder + gDirUtilp->getDirDelimiter() + LLURI::unescape(image.mUri);
+        }
+
         llifstream ifs(filepath, std::ios::binary);
         if (ifs.good())
         {

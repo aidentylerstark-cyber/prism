@@ -89,6 +89,11 @@ static const U32 MATERIAL_DOUBLE_SIDED_DIRTY = 0x1 << 8;
 static const U32 MATERIAL_ALPHA_MODE_DIRTY = 0x1 << 9;
 static const U32 MATERIAL_ALPHA_CUTOFF_DIRTY = 0x1 << 10;
 
+static const U32 MATERIAL_EMISSIVE_STRENGTH_DIRTY = 0x1 << 11;
+static const U32 MATERIAL_SPECULAR_FACTOR_DIRTY = 0x1 << 12;
+static const U32 MATERIAL_SPECULAR_COLOR_DIRTY = 0x1 << 13;
+static const U32 MATERIAL_SPECULAR_TEX_DIRTY = 0x1 << 14;
+
 LLUUID LLMaterialEditor::mOverrideObjectId;
 S32 LLMaterialEditor::mOverrideObjectTE = -1;
 bool LLMaterialEditor::mOverrideInProgress = false;
@@ -433,8 +438,10 @@ bool LLMaterialEditor::postBuild()
     mMetallicTextureCtrl = getChild<LLTextureCtrl>("metallic_roughness_texture");
     mEmissiveTextureCtrl = getChild<LLTextureCtrl>("emissive_texture");
     mNormalTextureCtrl = getChild<LLTextureCtrl>("normal_texture");
+    mSpecularTextureCtrl = getChild<LLTextureCtrl>("specular_texture");
     mBaseColorCtrl = getChild<LLColorSwatchCtrl>("base color");
     mEmissiveColorCtrl = getChild<LLColorSwatchCtrl>("emissive color");
+    mSpecularColorCtrl = getChild<LLColorSwatchCtrl>("specular color");
 
     if (!gAgent.isGodlike())
     {
@@ -443,6 +450,7 @@ bool LLMaterialEditor::postBuild()
         mMetallicTextureCtrl->setFilterPermissionMasks(PERM_COPY | PERM_TRANSFER);
         mEmissiveTextureCtrl->setFilterPermissionMasks(PERM_COPY | PERM_TRANSFER);
         mNormalTextureCtrl->setFilterPermissionMasks(PERM_COPY | PERM_TRANSFER);
+        mSpecularTextureCtrl->setFilterPermissionMasks(PERM_COPY | PERM_TRANSFER);
     }
 
     // Texture callback
@@ -450,6 +458,7 @@ bool LLMaterialEditor::postBuild()
     mMetallicTextureCtrl->setCommitCallback(boost::bind(&LLMaterialEditor::onCommitTexture, this, _1, _2, MATERIAL_METALLIC_ROUGHTNESS_TEX_DIRTY));
     mEmissiveTextureCtrl->setCommitCallback(boost::bind(&LLMaterialEditor::onCommitTexture, this, _1, _2, MATERIAL_EMISIVE_TEX_DIRTY));
     mNormalTextureCtrl->setCommitCallback(boost::bind(&LLMaterialEditor::onCommitTexture, this, _1, _2, MATERIAL_NORMAL_TEX_DIRTY));
+    mSpecularTextureCtrl->setCommitCallback(boost::bind(&LLMaterialEditor::onCommitTexture, this, _1, _2, MATERIAL_SPECULAR_TEX_DIRTY));
 
     mNormalTextureCtrl->setBlankImageAssetID(BLANK_OBJECT_NORMAL);
 
@@ -460,12 +469,14 @@ bool LLMaterialEditor::postBuild()
         mMetallicTextureCtrl->setOnCancelCallback(boost::bind(&LLMaterialEditor::onCancelCtrl, this, _1, _2, MATERIAL_METALLIC_ROUGHTNESS_TEX_DIRTY));
         mEmissiveTextureCtrl->setOnCancelCallback(boost::bind(&LLMaterialEditor::onCancelCtrl, this, _1, _2, MATERIAL_EMISIVE_TEX_DIRTY));
         mNormalTextureCtrl->setOnCancelCallback(boost::bind(&LLMaterialEditor::onCancelCtrl, this, _1, _2, MATERIAL_NORMAL_TEX_DIRTY));
+        mSpecularTextureCtrl->setOnCancelCallback(boost::bind(&LLMaterialEditor::onCancelCtrl, this, _1, _2, MATERIAL_SPECULAR_TEX_DIRTY));
 
         // Save applied changes on 'OK' to our recovery mechanism.
         mBaseColorTextureCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_BASE_COLOR_TEX_DIRTY));
         mMetallicTextureCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_METALLIC_ROUGHTNESS_TEX_DIRTY));
         mEmissiveTextureCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_EMISIVE_TEX_DIRTY));
         mNormalTextureCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_NORMAL_TEX_DIRTY));
+        mSpecularTextureCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_SPECULAR_TEX_DIRTY));
     }
     else
     {
@@ -473,6 +484,7 @@ bool LLMaterialEditor::postBuild()
         mMetallicTextureCtrl->setCanApplyImmediately(false);
         mEmissiveTextureCtrl->setCanApplyImmediately(false);
         mNormalTextureCtrl->setCanApplyImmediately(false);
+        mSpecularTextureCtrl->setCanApplyImmediately(false);
     }
 
     if (!mIsOverride)
@@ -524,6 +536,19 @@ bool LLMaterialEditor::postBuild()
     childSetCommitCallback("metalness factor", changes_callback, (void*)&MATERIAL_METALLIC_ROUGHTNESS_METALNESS_DIRTY);
     childSetCommitCallback("roughness factor", changes_callback, (void*)&MATERIAL_METALLIC_ROUGHTNESS_ROUGHNESS_DIRTY);
 
+    // Specular
+    mSpecularColorCtrl->setCommitCallback(changes_callback, (void*)&MATERIAL_SPECULAR_COLOR_DIRTY);
+    if (mIsOverride)
+    {
+        mSpecularColorCtrl->setOnCancelCallback(boost::bind(&LLMaterialEditor::onCancelCtrl, this, _1, _2, MATERIAL_SPECULAR_COLOR_DIRTY));
+        mSpecularColorCtrl->setOnSelectCallback(boost::bind(&LLMaterialEditor::onSelectCtrl, this, _1, _2, MATERIAL_SPECULAR_COLOR_DIRTY));
+    }
+    else
+    {
+        mSpecularColorCtrl->setCanApplyImmediately(false);
+    }
+    childSetCommitCallback("specular factor", changes_callback, (void*)&MATERIAL_SPECULAR_FACTOR_DIRTY);
+
     // Emissive
     mEmissiveColorCtrl->setCommitCallback(changes_callback, (void*)&MATERIAL_EMISIVE_COLOR_DIRTY);
     if (mIsOverride)
@@ -535,6 +560,7 @@ bool LLMaterialEditor::postBuild()
     {
         mEmissiveColorCtrl->setCanApplyImmediately(false);
     }
+    childSetCommitCallback("emissive strength", changes_callback, (void*)&MATERIAL_EMISSIVE_STRENGTH_DIRTY);
 
     if (!mIsOverride)
     {
@@ -762,6 +788,16 @@ void LLMaterialEditor::setEmissiveColor(const LLColor4& color)
     mEmissiveColorCtrl->setValue(srgbColor4(color).getValue());
 }
 
+F32 LLMaterialEditor::getEmissiveStrength()
+{
+    return childGetValue("emissive strength").asReal();
+}
+
+void LLMaterialEditor::setEmissiveStrength(F32 strength)
+{
+    childSetValue("emissive strength", strength);
+}
+
 LLUUID LLMaterialEditor::getNormalId()
 {
     return mNormalTextureCtrl->getValue().asUUID();
@@ -794,6 +830,36 @@ bool LLMaterialEditor::getDoubleSided()
 void LLMaterialEditor::setDoubleSided(bool double_sided)
 {
     childSetValue("double sided", double_sided);
+}
+
+F32 LLMaterialEditor::getSpecularFactor()
+{
+    return childGetValue("specular factor").asReal();
+}
+
+void LLMaterialEditor::setSpecularFactor(F32 factor)
+{
+    childSetValue("specular factor", factor);
+}
+
+LLColor3 LLMaterialEditor::getSpecularColorFactor()
+{
+    return LLColor3(mSpecularColorCtrl->get());
+}
+
+void LLMaterialEditor::setSpecularColorFactor(const LLColor3& color)
+{
+    mSpecularColorCtrl->set(LLColor4(color));
+}
+
+LLUUID LLMaterialEditor::getSpecularId()
+{
+    return mSpecularTextureCtrl->getImageAssetID();
+}
+
+void LLMaterialEditor::setSpecularId(const LLUUID& id)
+{
+    mSpecularTextureCtrl->setImageAssetID(id);
 }
 
 void LLMaterialEditor::resetUnsavedChanges()
@@ -2674,11 +2740,60 @@ bool LLMaterialEditor::setFromGltfModel(const LL::GLTF::Asset& asset, S32 index,
         setBaseColor(LLColor4((F32)bcf.x, (F32)bcf.y, (F32)bcf.z, (F32)bcf.w));
         const auto& ef = material_in.mEmissiveFactor;
         setEmissiveColor(LLColor4((F32)ef.x, (F32)ef.y, (F32)ef.z, 1.0f));
+        if (material_in.mEmissiveStrength.mPresent)
+        {
+            setEmissiveStrength((F32)material_in.mEmissiveStrength.mEmissiveStrength);
+        }
+        else
+        {
+            setEmissiveStrength(1.0f);
+        }
 
         setMetalnessFactor((F32)material_in.mPbrMetallicRoughness.mMetallicFactor);
         setRoughnessFactor((F32)material_in.mPbrMetallicRoughness.mRoughnessFactor);
 
         setDoubleSided(material_in.mDoubleSided);
+
+        // Specular
+        if (material_in.mSpecular.mPresent)
+        {
+            setSpecularFactor((F32)material_in.mSpecular.mSpecularFactor);
+            const auto& scf = material_in.mSpecular.mSpecularColorFactor;
+            setSpecularColorFactor(LLColor3((F32)scf.x, (F32)scf.y, (F32)scf.z));
+
+            if (set_textures)
+            {
+                // Prefer specularColorTexture (RGB), fall back to specularTexture (A)
+                S32 spec_tex_idx = material_in.mSpecular.mSpecularColorTexture.mIndex;
+                if (spec_tex_idx < 0)
+                {
+                    spec_tex_idx = material_in.mSpecular.mSpecularTexture.mIndex;
+                }
+                if (spec_tex_idx >= 0 && (size_t)spec_tex_idx < asset.mTextures.size())
+                {
+                    S32 src = asset.mTextures[spec_tex_idx].mSource;
+                    if (src >= 0 && (size_t)src < asset.mImages.size())
+                    {
+                        LLUUID spec_id;
+                        spec_id.set(asset.mImages[src].mUri);
+                        setSpecularId(spec_id);
+                    }
+                }
+                else
+                {
+                    setSpecularId(LLUUID::null);
+                }
+            }
+        }
+        else
+        {
+            setSpecularFactor(1.0f);
+            setSpecularColorFactor(LLColor3(1.f, 1.f, 1.f));
+            if (set_textures)
+            {
+                setSpecularId(LLUUID::null);
+            }
+        }
     }
 
     return true;
@@ -3268,11 +3383,16 @@ void LLMaterialEditor::getGLTFMaterial(LLGLTFMaterial* mat)
     mat->mRoughnessFactor = getRoughnessFactor();
 
     mat->mEmissiveColor = getEmissiveColor();
+    mat->mEmissiveStrength = getEmissiveStrength();
     mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_EMISSIVE] = getEmissiveId();
 
     mat->mDoubleSided = getDoubleSided();
     mat->setAlphaMode(getAlphaMode());
     mat->mAlphaCutoff = getAlphaCutoff();
+
+    mat->mSpecularFactor = getSpecularFactor();
+    mat->mSpecularColorFactor = getSpecularColorFactor();
+    mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR] = getSpecularId();
 }
 
 void LLMaterialEditor::setFromGLTFMaterial(LLGLTFMaterial* mat)
@@ -3286,11 +3406,16 @@ void LLMaterialEditor::setFromGLTFMaterial(LLGLTFMaterial* mat)
     setRoughnessFactor(mat->mRoughnessFactor);
 
     setEmissiveColor(mat->mEmissiveColor);
+    setEmissiveStrength(mat->mEmissiveStrength);
     setEmissiveId(mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_EMISSIVE]);
 
     setDoubleSided(mat->mDoubleSided);
     setAlphaMode(mat->getAlphaMode());
     setAlphaCutoff(mat->mAlphaCutoff);
+
+    setSpecularFactor(mat->mSpecularFactor);
+    setSpecularColorFactor(mat->mSpecularColorFactor);
+    setSpecularId(mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR]);
 
     if (mat->hasLocalTextures())
     {
@@ -3316,6 +3441,10 @@ void LLMaterialEditor::setFromGLTFMaterial(LLGLTFMaterial* mat)
             if (world_id == mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_NORMAL])
             {
                 subscribeToLocalTexture(MATERIAL_NORMAL_TEX_DIRTY, val.first);
+            }
+            if (world_id == mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR])
+            {
+                subscribeToLocalTexture(MATERIAL_SPECULAR_TEX_DIRTY, val.first);
             }
         }
     }

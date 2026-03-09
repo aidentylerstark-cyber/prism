@@ -274,6 +274,89 @@
     border="true"
     follows="left|top"
     width="246"
+    height="196"
+    layout="topleft"
+    left="1"
+    mouse_opaque="false"
+    name="specular_texture_pnl"
+    top_pad="5">
+    <text
+      type="string"
+      font.style="BOLD"
+      length="1"
+      follows="left|top"
+      height="10"
+      layout="topleft"
+      left="10"
+      top="5"
+      width="128"
+      name="specular_lbl">
+      Specular:
+    </text>
+    <texture_picker
+      can_apply_immediately="true"
+      default_image_name="Default"
+      fallback_image="materials_ui_x_24.png"
+      allow_no_texture="true"
+      follows="left|top"
+      top_pad="8"
+      height="151"
+      layout="topleft"
+      left="10"
+      name="specular_texture"
+      tool_tip="Specular map. RGB channels carry specular color, alpha channel carries specular factor."
+      width="128" />
+    <text
+      type="string"
+      length="1"
+      follows="left|top"
+      height="10"
+      layout="topleft"
+      left_pad="5"
+      top="8"
+      name="specular_color_lbl">
+      Color
+    </text>
+    <color_swatch
+      can_apply_immediately="true"
+      follows="left|top"
+      height="40"
+      label_height="0"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      name="specular color"
+      width="40" />
+    <text
+      type="string"
+      length="1"
+      follows="left|top"
+      height="10"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      width="96"
+      name="specular_factor_lbl">
+      Specular Factor
+    </text>
+    <spinner
+      decimal_digits="3"
+      follows="left|top"
+      height="19"
+      increment="0.01"
+      initial_value="1"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      min_val="0"
+      max_val="1"
+      name="specular factor"
+      width="64"/>
+  </panel>
+  <panel
+    border="true"
+    follows="left|top"
+    width="246"
     height="175"
     layout="topleft"
     left="1"
@@ -289,7 +372,7 @@
       layout="topleft"
       left="10"
       top="5"
-      width="64"
+      width="128"
       name="emissive_lbl">
       Emissive:
     </text>
@@ -339,6 +422,31 @@
      top_pad="5"
      name="emissive color"
      width="40" />
+    <text
+      type="string"
+      length="1"
+      follows="left|top"
+      height="10"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      width="96"
+      name="emissive_strength_lbl">
+      Strength
+    </text>
+    <spinner
+      decimal_digits="3"
+      follows="left|top"
+      height="19"
+      increment="0.1"
+      initial_value="1"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      min_val="0"
+      max_val="100"
+      name="emissive strength"
+      width="64"/>
   </panel>
   <panel
     border="true"

@@ -46,7 +46,9 @@ namespace LL
             "KHR_materials_transmission",
             "KHR_materials_ior",
             "KHR_materials_volume",
-            "KHR_materials_dispersion"
+            "KHR_materials_dispersion",
+            "KHR_materials_emissive_strength",
+            "KHR_materials_specular"
         };
 
         static std::unordered_set<std::string> ExtensionsIgnored = {
@@ -1331,6 +1333,42 @@ void Material::Dispersion::serialize(object& dst) const
     write(mDispersion, "dispersion", dst, 0.f);
 }
 
+const Material::EmissiveStrength& Material::EmissiveStrength::operator=(const Value& src)
+{
+    mPresent = true;
+    if (src.is_object())
+    {
+        copy(src, "emissiveStrength", mEmissiveStrength);
+    }
+    return *this;
+}
+
+void Material::EmissiveStrength::serialize(object& dst) const
+{
+    write(mEmissiveStrength, "emissiveStrength", dst, 1.0f);
+}
+
+const Material::Specular& Material::Specular::operator=(const Value& src)
+{
+    mPresent = true;
+    if (src.is_object())
+    {
+        copy(src, "specularFactor", mSpecularFactor);
+        copy(src, "specularTexture", mSpecularTexture);
+        copy(src, "specularColorFactor", mSpecularColorFactor);
+        copy(src, "specularColorTexture", mSpecularColorTexture);
+    }
+    return *this;
+}
+
+void Material::Specular::serialize(object& dst) const
+{
+    write(mSpecularFactor, "specularFactor", dst, 1.0f);
+    write(mSpecularTexture, "specularTexture", dst);
+    write(mSpecularColorFactor, "specularColorFactor", dst, vec3(1.f, 1.f, 1.f));
+    write(mSpecularColorTexture, "specularColorTexture", dst);
+}
+
 void TextureTransform::getPacked(vec4* packed) const
 {
     packed[0] = vec4(mScale.x, mScale.y, mRotation, mOffset.x);
@@ -1376,7 +1414,9 @@ void Material::serialize(object& dst) const
         &mTransmission, "KHR_materials_transmission",
         &mIOR, "KHR_materials_ior",
         &mVolume, "KHR_materials_volume",
-        &mDispersion, "KHR_materials_dispersion");
+        &mDispersion, "KHR_materials_dispersion",
+        &mEmissiveStrength, "KHR_materials_emissive_strength",
+        &mSpecular, "KHR_materials_specular");
 }
 
 const Material& Material::operator=(const Value& src)
@@ -1397,7 +1437,9 @@ const Material& Material::operator=(const Value& src)
             "KHR_materials_transmission", &mTransmission,
             "KHR_materials_ior", &mIOR,
             "KHR_materials_volume", &mVolume,
-            "KHR_materials_dispersion", &mDispersion);
+            "KHR_materials_dispersion", &mDispersion,
+            "KHR_materials_emissive_strength", &mEmissiveStrength,
+            "KHR_materials_specular", &mSpecular);
     }
     return *this;
 }

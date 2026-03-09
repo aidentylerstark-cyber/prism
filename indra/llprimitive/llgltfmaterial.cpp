@@ -64,6 +64,9 @@ LLGLTFMaterial::LLGLTFMaterial()
     mBaseColor.set(1.f, 1.f, 1.f, 1.f);
     mMetallicFactor = mRoughnessFactor = 1.f;
     mAlphaCutoff = 0.5f;
+    mEmissiveStrength = 1.f;
+    mSpecularFactor = 1.f;
+    mSpecularColorFactor.set(1.f, 1.f, 1.f);
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
     {
         mTextureTransform[i].mScale.set(1.f, 1.f);
@@ -122,6 +125,9 @@ LLGLTFMaterial& LLGLTFMaterial::operator=(const LLGLTFMaterial& rhs)
     mMetallicFactor = rhs.mMetallicFactor;
     mRoughnessFactor = rhs.mRoughnessFactor;
     mAlphaCutoff = rhs.mAlphaCutoff;
+    mEmissiveStrength = rhs.mEmissiveStrength;
+    mSpecularFactor = rhs.mSpecularFactor;
+    mSpecularColorFactor = rhs.mSpecularColorFactor;
 
     mDoubleSided = rhs.mDoubleSided;
     mAlphaMode = rhs.mAlphaMode;
@@ -172,6 +178,9 @@ bool LLGLTFMaterial::operator==(const LLGLTFMaterial& rhs) const
         mMetallicFactor == rhs.mMetallicFactor &&
         mRoughnessFactor == rhs.mRoughnessFactor &&
         mAlphaCutoff == rhs.mAlphaCutoff &&
+        mEmissiveStrength == rhs.mEmissiveStrength &&
+        mSpecularFactor == rhs.mSpecularFactor &&
+        mSpecularColorFactor == rhs.mSpecularColorFactor &&
 
         mDoubleSided == rhs.mDoubleSided &&
         mAlphaMode == rhs.mAlphaMode &&
@@ -377,6 +386,63 @@ bool LLGLTFMaterial::setFromDocument(const boost::json::value& doc, S32 mat_inde
     if (ds && ds->is_bool())
     {
         mDoubleSided = ds->as_bool();
+    }
+
+    // Material extensions
+    const auto* extensions_val = mat_obj.if_contains("extensions");
+    if (extensions_val && extensions_val->is_object())
+    {
+        const auto& extensions = extensions_val->as_object();
+
+        // KHR_materials_emissive_strength
+        const auto* emissive_strength_ext = extensions.if_contains("KHR_materials_emissive_strength");
+        if (emissive_strength_ext && emissive_strength_ext->is_object())
+        {
+            const auto& es = emissive_strength_ext->as_object();
+            const auto* es_val = es.if_contains("emissiveStrength");
+            if (es_val && es_val->is_number())
+            {
+                mEmissiveStrength = llmax((F32)es_val->to_number<double>(), 0.f);
+            }
+        }
+
+        // KHR_materials_specular
+        const auto* specular_ext = extensions.if_contains("KHR_materials_specular");
+        if (specular_ext && specular_ext->is_object())
+        {
+            const auto& spec = specular_ext->as_object();
+
+            const auto* sf = spec.if_contains("specularFactor");
+            if (sf && sf->is_number())
+            {
+                mSpecularFactor = llclamp((F32)sf->to_number<double>(), 0.f, 1.f);
+            }
+
+            const auto* scf = spec.if_contains("specularColorFactor");
+            if (scf && scf->is_array())
+            {
+                const auto& arr = scf->as_array();
+                if (arr.size() >= 3)
+                {
+                    mSpecularColorFactor.set(
+                        (F32)arr[0].to_number<double>(),
+                        (F32)arr[1].to_number<double>(),
+                        (F32)arr[2].to_number<double>());
+                }
+            }
+
+            const auto* spec_tex = spec.if_contains("specularTexture");
+            if (spec_tex && spec_tex->is_object())
+            {
+                readTextureInfo(doc, spec_tex->as_object(), GLTF_TEXTURE_INFO_SPECULAR);
+            }
+
+            const auto* spec_color_tex = spec.if_contains("specularColorTexture");
+            if (spec_color_tex && spec_color_tex->is_object())
+            {
+                readTextureInfo(doc, spec_color_tex->as_object(), GLTF_TEXTURE_INFO_SPECULAR);
+            }
+        }
     }
 
     // Extras
@@ -604,6 +670,59 @@ boost::json::value LLGLTFMaterial::writeDocument() const
         mat_obj["extras"] = extras;
     }
 
+    // Material extensions
+    boost::json::object mat_extensions;
+
+    // KHR_materials_emissive_strength
+    if (mEmissiveStrength != getDefaultEmissiveStrength())
+    {
+        boost::json::object es_ext;
+        es_ext["emissiveStrength"] = (double)mEmissiveStrength;
+        mat_extensions["KHR_materials_emissive_strength"] = es_ext;
+    }
+
+    // KHR_materials_specular
+    {
+        bool has_specular = false;
+        boost::json::object specular_ext;
+
+        if (mSpecularFactor != getDefaultSpecularFactor())
+        {
+            specular_ext["specularFactor"] = (double)mSpecularFactor;
+            has_specular = true;
+        }
+
+        if (mSpecularColorFactor != getDefaultSpecularColorFactor())
+        {
+            specular_ext["specularColorFactor"] = boost::json::array({
+                boost::json::value((double)mSpecularColorFactor.mV[0]),
+                boost::json::value((double)mSpecularColorFactor.mV[1]),
+                boost::json::value((double)mSpecularColorFactor.mV[2])
+            });
+            has_specular = true;
+        }
+
+        boost::json::object spec_tex_dst;
+        writeTextureEntry(images, textures, spec_tex_dst, "specularTexture_tmp",
+            mTextureId[GLTF_TEXTURE_INFO_SPECULAR], mTextureTransform[GLTF_TEXTURE_INFO_SPECULAR]);
+        if (spec_tex_dst.contains("specularTexture_tmp"))
+        {
+            specular_ext["specularTexture"] = spec_tex_dst["specularTexture_tmp"];
+            specular_ext["specularColorTexture"] = spec_tex_dst["specularTexture_tmp"];
+            has_specular = true;
+        }
+
+        if (has_specular)
+        {
+            mat_extensions["KHR_materials_specular"] = specular_ext;
+        }
+    }
+
+    if (!mat_extensions.empty())
+    {
+        mat_obj["extensions"] = mat_extensions;
+    }
+
     boost::json::array materials;
     materials.push_back(mat_obj);
     root["materials"] = materials;
@@ -683,6 +802,11 @@ void LLGLTFMaterial::setOcclusionRoughnessMetallicId(const LLUUID& id, bool for_
 void LLGLTFMaterial::setEmissiveId(const LLUUID& id, bool for_override)
 {
     setTextureId(GLTF_TEXTURE_INFO_EMISSIVE, id, for_override);
+}
+
+void LLGLTFMaterial::setSpecularId(const LLUUID& id, bool for_override)
+{
+    setTextureId(GLTF_TEXTURE_INFO_SPECULAR, id, for_override);
 }
 
 void LLGLTFMaterial::setBaseColorFactor(const LLColor4& baseColor, bool for_override)
@@ -774,6 +898,37 @@ void LLGLTFMaterial::setDoubleSided(bool double_sided, bool for_override)
     mOverrideDoubleSided = for_override && mDoubleSided == getDefaultDoubleSided();
 }
 
+void LLGLTFMaterial::setEmissiveStrength(F32 strength, bool for_override)
+{
+    mEmissiveStrength = llmax(strength, 0.f);
+    if (for_override)
+    {
+        if (mEmissiveStrength == getDefaultEmissiveStrength())
+        {
+            mEmissiveStrength -= FLT_EPSILON;
+        }
+    }
+}
+
+void LLGLTFMaterial::setSpecularFactor(F32 factor, bool for_override)
+{
+    mSpecularFactor = llclamp(factor, 0.f, for_override ? 1.f - FLT_EPSILON : 1.f);
+}
+
+void LLGLTFMaterial::setSpecularColorFactor(const LLColor3& color, bool for_override)
+{
+    mSpecularColorFactor = color;
+    mSpecularColorFactor.clamp();
+
+    if (for_override)
+    {
+        if (mSpecularColorFactor == getDefaultSpecularColorFactor())
+        {
+            mSpecularColorFactor.mV[0] -= FLT_EPSILON;
+        }
+    }
+}
+
 void LLGLTFMaterial::setTextureOffset(TextureInfo texture_info, const LLVector2& offset)
 {
     mTextureTransform[texture_info].mOffset = offset;
@@ -827,6 +982,21 @@ LLColor3 LLGLTFMaterial::getDefaultEmissiveColor()
 bool LLGLTFMaterial::getDefaultDoubleSided()
 {
     return sDefault.mDoubleSided;
+}
+
+F32 LLGLTFMaterial::getDefaultEmissiveStrength()
+{
+    return sDefault.mEmissiveStrength;
+}
+
+F32 LLGLTFMaterial::getDefaultSpecularFactor()
+{
+    return sDefault.mSpecularFactor;
+}
+
+LLColor3 LLGLTFMaterial::getDefaultSpecularColorFactor()
+{
+    return sDefault.mSpecularColorFactor;
 }
 
 LLVector2 LLGLTFMaterial::getDefaultTextureOffset()
@@ -903,6 +1073,21 @@ void LLGLTFMaterial::applyOverride(const LLGLTFMaterial& override_mat)
     if (override_mat.mDoubleSided != getDefaultDoubleSided() || override_mat.mOverrideDoubleSided)
     {
         mDoubleSided = override_mat.mDoubleSided;
+    }
+
+    if (override_mat.mEmissiveStrength != getDefaultEmissiveStrength())
+    {
+        mEmissiveStrength = override_mat.mEmissiveStrength;
+    }
+
+    if (override_mat.mSpecularFactor != getDefaultSpecularFactor())
+    {
+        mSpecularFactor = override_mat.mSpecularFactor;
+    }
+
+    if (override_mat.mSpecularColorFactor != getDefaultSpecularColorFactor())
+    {
+        mSpecularColorFactor = override_mat.mSpecularColorFactor;
     }
 
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
@@ -982,6 +1167,21 @@ void LLGLTFMaterial::getOverrideLLSD(const LLGLTFMaterial& override_mat, LLSD& d
     if (override_mat.mDoubleSided != getDefaultDoubleSided() || override_mat.mOverrideDoubleSided)
     {
         data["ds"] = override_mat.mDoubleSided;
+    }
+
+    if (override_mat.mEmissiveStrength != getDefaultEmissiveStrength())
+    {
+        data["es"] = override_mat.mEmissiveStrength;
+    }
+
+    if (override_mat.mSpecularFactor != getDefaultSpecularFactor())
+    {
+        data["sf"] = override_mat.mSpecularFactor;
+    }
+
+    if (override_mat.mSpecularColorFactor != getDefaultSpecularColorFactor())
+    {
+        data["sc"] = override_mat.mSpecularColorFactor.getValue();
     }
 
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
@@ -1083,6 +1283,36 @@ void LLGLTFMaterial::applyOverrideLLSD(const LLSD& data)
     {
         mDoubleSided = ds.asBoolean();
         mOverrideDoubleSided = true;
+    }
+
+    const LLSD& es = data["es"];
+    if (es.isReal())
+    {
+        mEmissiveStrength = (F32)es.asReal();
+        if (mEmissiveStrength == getDefaultEmissiveStrength())
+        {
+            mEmissiveStrength -= FLT_EPSILON;
+        }
+    }
+
+    const LLSD& sf = data["sf"];
+    if (sf.isReal())
+    {
+        mSpecularFactor = (F32)sf.asReal();
+        if (mSpecularFactor == getDefaultSpecularFactor())
+        {
+            mSpecularFactor -= FLT_EPSILON;
+        }
+    }
+
+    const LLSD& sc = data["sc"];
+    if (sc.isDefined())
+    {
+        mSpecularColorFactor.setValue(sc);
+        if (mSpecularColorFactor == getDefaultSpecularColorFactor())
+        {
+            mSpecularColorFactor.mV[0] -= FLT_EPSILON;
+        }
     }
 
     const LLSD& ti = data["ti"];

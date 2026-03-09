@@ -159,6 +159,27 @@ namespace LL
                 void serialize(boost::json::object& dst) const;
             };
 
+            class EmissiveStrength : public Extension // KHR_materials_emissive_strength
+            {
+            public:
+                F32 mEmissiveStrength = 1.0f;
+
+                const EmissiveStrength& operator=(const Value& src);
+                void serialize(boost::json::object& dst) const;
+            };
+
+            class Specular : public Extension // KHR_materials_specular
+            {
+            public:
+                F32 mSpecularFactor = 1.0f;
+                TextureInfo mSpecularTexture;
+                vec3 mSpecularColorFactor = vec3(1.f, 1.f, 1.f);
+                TextureInfo mSpecularColorTexture;
+
+                const Specular& operator=(const Value& src);
+                void serialize(boost::json::object& dst) const;
+            };
+
             enum class AlphaMode
             {
                 OPAQUE,
@@ -198,6 +219,8 @@ namespace LL
             IOR mIOR;
             Volume mVolume;
             Dispersion mDispersion;
+            EmissiveStrength mEmissiveStrength;
+            Specular mSpecular;
 
             bool isMultiUV() const;
 

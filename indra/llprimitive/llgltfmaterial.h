@@ -100,6 +100,7 @@ public:
         // -Cosmic,2023-01-26
         GLTF_TEXTURE_INFO_OCCLUSION = GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS,
         GLTF_TEXTURE_INFO_EMISSIVE,
+        GLTF_TEXTURE_INFO_SPECULAR,
 
         GLTF_TEXTURE_INFO_COUNT
     };
@@ -122,6 +123,7 @@ public:
     void setNormalId(const LLUUID& id, bool for_override = false);
     void setOcclusionRoughnessMetallicId(const LLUUID& id, bool for_override = false);
     void setEmissiveId(const LLUUID& id, bool for_override = false);
+    void setSpecularId(const LLUUID& id, bool for_override = false);
 
     void setBaseColorFactor(const LLColor4& baseColor, bool for_override = false);
     void setAlphaCutoff(F32 cutoff, bool for_override = false);
@@ -130,6 +132,9 @@ public:
     void setRoughnessFactor(F32 roughness, bool for_override = false);
     void setAlphaMode(S32 mode, bool for_override = false);
     void setDoubleSided(bool double_sided, bool for_override = false);
+    void setEmissiveStrength(F32 strength, bool for_override = false);
+    void setSpecularFactor(F32 factor, bool for_override = false);
+    void setSpecularColorFactor(const LLColor3& color, bool for_override = false);
 
     // *NOTE: texture offsets only exist in overrides, so "for_override" is not needed
 
@@ -145,6 +150,9 @@ public:
     static LLColor4 getDefaultBaseColor();
     static LLColor3 getDefaultEmissiveColor();
     static bool getDefaultDoubleSided();
+    static F32 getDefaultEmissiveStrength();
+    static F32 getDefaultSpecularFactor();
+    static LLColor3 getDefaultSpecularColorFactor();
     static LLVector2 getDefaultTextureOffset();
     static LLVector2 getDefaultTextureScale();
     static F32 getDefaultTextureRotation();
@@ -268,6 +276,9 @@ public:
     F32 mMetallicFactor;
     F32 mRoughnessFactor;
     F32 mAlphaCutoff;
+    F32 mEmissiveStrength;
+    F32 mSpecularFactor;
+    LLColor3 mSpecularColorFactor;
 
     AlphaMode mAlphaMode;
 

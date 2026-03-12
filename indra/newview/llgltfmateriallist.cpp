@@ -221,6 +221,55 @@ void LLGLTFMaterialList::applyOverrideMessage(LLMessageSystem* msg, const std::s
 
                 if (obj)
                 {
+                    // Preserve locally-applied extension data that the server
+                    // may have sanitized (e.g. KHR_materials_specular,
+                    // KHR_materials_emissive_strength)
+                    LLTextureEntry* tep = obj->getTE(te);
+                    if (tep)
+                    {
+                        const LLGLTFMaterial* existing_override = tep->getGLTFMaterialOverride();
+                        LL_WARNS("GLTF") << "applyOverrideMessage: te=" << te
+                            << " existing_override=" << (existing_override ? "yes" : "no")
+                            << " od has sc=" << od[i].has("sc");
+                        if (existing_override)
+                        {
+                            LL_CONT << " existing specColor=("
+                                << existing_override->mSpecularColorFactor.mV[0] << ","
+                                << existing_override->mSpecularColorFactor.mV[1] << ","
+                                << existing_override->mSpecularColorFactor.mV[2] << ")";
+                        }
+                        LL_CONT << LL_ENDL;
+                        if (existing_override)
+                        {
+                            if (existing_override->mEmissiveStrength != LLGLTFMaterial::getDefaultEmissiveStrength()
+                                && !od[i].has("es"))
+                            {
+                                mat->mEmissiveStrength = existing_override->mEmissiveStrength;
+                            }
+                            if (existing_override->mSpecularFactor != LLGLTFMaterial::getDefaultSpecularFactor()
+                                && !od[i].has("sf"))
+                            {
+                                mat->mSpecularFactor = existing_override->mSpecularFactor;
+                            }
+                            if (existing_override->mSpecularColorFactor != LLGLTFMaterial::getDefaultSpecularColorFactor()
+                                && !od[i].has("sc"))
+                            {
+                                mat->mSpecularColorFactor = existing_override->mSpecularColorFactor;
+                            }
+                            if (existing_override->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR].notNull()
+                                && !od[i].has("tex"))
+                            {
+                                mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR] =
+                                    existing_override->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR];
+                            }
+                            if (existing_override->mIOR != LLGLTFMaterial::getDefaultIOR()
+                                && !od[i].has("ior"))
+                            {
+                                mat->mIOR = existing_override->mIOR;
+                            }
+                        }
+                    }
+
                     obj->setTEGLTFMaterialOverride(te, mat);
                     if (obj->getTE(te) && obj->getTE(te)->isSelected())
                     {

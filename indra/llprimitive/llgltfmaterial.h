@@ -135,6 +135,7 @@ public:
     void setEmissiveStrength(F32 strength, bool for_override = false);
     void setSpecularFactor(F32 factor, bool for_override = false);
     void setSpecularColorFactor(const LLColor3& color, bool for_override = false);
+    void setIOR(F32 ior, bool for_override = false);
 
     // *NOTE: texture offsets only exist in overrides, so "for_override" is not needed
 
@@ -153,6 +154,7 @@ public:
     static F32 getDefaultEmissiveStrength();
     static F32 getDefaultSpecularFactor();
     static LLColor3 getDefaultSpecularColorFactor();
+    static F32 getDefaultIOR();
     static LLVector2 getDefaultTextureOffset();
     static LLVector2 getDefaultTextureScale();
     static F32 getDefaultTextureRotation();
@@ -279,6 +281,7 @@ public:
     F32 mEmissiveStrength;
     F32 mSpecularFactor;
     LLColor3 mSpecularColorFactor;
+    F32 mIOR;
 
     AlphaMode mAlphaMode;
 

@@ -274,7 +274,7 @@
     border="true"
     follows="left|top"
     width="246"
-    height="196"
+    height="236"
     layout="topleft"
     left="1"
     mouse_opaque="false"
@@ -351,6 +351,31 @@
       min_val="0"
       max_val="1"
       name="specular factor"
+      width="64"/>
+    <text
+      type="string"
+      length="1"
+      follows="left|top"
+      height="10"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      width="96"
+      name="ior_lbl">
+      IOR
+    </text>
+    <spinner
+      decimal_digits="3"
+      follows="left|top"
+      height="19"
+      increment="0.01"
+      initial_value="1.5"
+      layout="topleft"
+      left_delta="0"
+      top_pad="5"
+      min_val="0"
+      max_val="5"
+      name="ior"
       width="64"/>
   </panel>
   <panel

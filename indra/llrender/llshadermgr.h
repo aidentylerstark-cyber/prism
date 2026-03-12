@@ -357,6 +357,11 @@ public:
         AVATAR_LAST_MATRIX,                 //  "lastMatrixPalette"
         MOTION_BLUR_STRENGTH,               //  "motion_blur_strength"
 
+        SPECULAR_FACTOR,                    //  "specularFactor" (KHR_materials_specular)
+        SPECULAR_COLOR_FACTOR,              //  "specularColorFactor" (KHR_materials_specular)
+        EMISSIVE_STRENGTH,                  //  "emissiveStrength" (KHR_materials_emissive_strength)
+        IOR,                                //  "ior" (KHR_materials_ior)
+
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
     // clang-format on

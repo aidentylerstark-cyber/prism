@@ -751,7 +751,7 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
     }
 
     // Master definition can be found in deferredUtil.glsl
-    extra_code_text[extra_code_count++] = strdup("struct GBufferInfo { vec4 albedo; vec4 specular; vec3 normal; vec4 emissive; float gbufferFlag; float envIntensity; };\n");
+    extra_code_text[extra_code_count++] = strdup("struct GBufferInfo { vec4 albedo; vec4 specular; vec3 normal; vec4 emissive; float gbufferFlag; float envIntensity; float occlusion; };\n");
 
     //copy file into memory
     enum {
@@ -1561,6 +1561,11 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("last_object_matrix");
     mReservedUniforms.push_back("lastMatrixPalette");
     mReservedUniforms.push_back("motion_blur_strength");
+
+    mReservedUniforms.push_back("specularFactor");
+    mReservedUniforms.push_back("specularColorFactor");
+    mReservedUniforms.push_back("emissiveStrength");
+    mReservedUniforms.push_back("ior");
 
     llassert(mReservedUniforms.size() == END_RESERVED_UNIFORMS);
 

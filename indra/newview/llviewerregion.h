@@ -75,6 +75,7 @@ class LLHost;
 class LLBBox;
 class LLSpatialGroup;
 class LLDrawable;
+class LLGLTFMaterial;
 class LLGLTFOverrideCacheEntry;
 class LLViewerRegionImpl;
 class LLViewerOctreeGroup;
@@ -371,6 +372,7 @@ public:
     eCacheUpdateResult cacheFullUpdate(LLViewerObject* objectp, LLDataPackerBinaryBuffer &dp, U32 flags);
 
     void cacheFullUpdateGLTFOverride(const LLGLTFOverrideCacheEntry &override_data);
+    void cacheGLTFOverrideSide(U32 local_id, const LLUUID& object_id, S32 side, LLGLTFMaterial* material);
 
     LLVOCacheEntry* getCacheEntryForOctree(U32 local_id);
     LLVOCacheEntry* getCacheEntry(U32 local_id, bool valid = true);

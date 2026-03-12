@@ -93,6 +93,7 @@ static const U32 MATERIAL_EMISSIVE_STRENGTH_DIRTY = 0x1 << 11;
 static const U32 MATERIAL_SPECULAR_FACTOR_DIRTY = 0x1 << 12;
 static const U32 MATERIAL_SPECULAR_COLOR_DIRTY = 0x1 << 13;
 static const U32 MATERIAL_SPECULAR_TEX_DIRTY = 0x1 << 14;
+static const U32 MATERIAL_IOR_DIRTY = 0x1 << 15;
 
 LLUUID LLMaterialEditor::mOverrideObjectId;
 S32 LLMaterialEditor::mOverrideObjectTE = -1;
@@ -548,6 +549,7 @@ bool LLMaterialEditor::postBuild()
         mSpecularColorCtrl->setCanApplyImmediately(false);
     }
     childSetCommitCallback("specular factor", changes_callback, (void*)&MATERIAL_SPECULAR_FACTOR_DIRTY);
+    childSetCommitCallback("ior", changes_callback, (void*)&MATERIAL_IOR_DIRTY);
 
     // Emissive
     mEmissiveColorCtrl->setCommitCallback(changes_callback, (void*)&MATERIAL_EMISIVE_COLOR_DIRTY);
@@ -860,6 +862,16 @@ LLUUID LLMaterialEditor::getSpecularId()
 void LLMaterialEditor::setSpecularId(const LLUUID& id)
 {
     mSpecularTextureCtrl->setImageAssetID(id);
+}
+
+F32 LLMaterialEditor::getIOR()
+{
+    return childGetValue("ior").asReal();
+}
+
+void LLMaterialEditor::setIOR(F32 ior)
+{
+    childSetValue("ior", ior);
 }
 
 void LLMaterialEditor::resetUnsavedChanges()
@@ -2794,6 +2806,16 @@ bool LLMaterialEditor::setFromGltfModel(const LL::GLTF::Asset& asset, S32 index,
                 setSpecularId(LLUUID::null);
             }
         }
+
+        // IOR
+        if (material_in.mIOR.mPresent)
+        {
+            setIOR((F32)material_in.mIOR.mIor);
+        }
+        else
+        {
+            setIOR(1.5f);
+        }
     }
 
     return true;
@@ -3284,12 +3306,85 @@ public:
                 material->setAlphaCutoff(revert_mat->mAlphaCutoff, false);
             }
 
+            if (changed_flags & MATERIAL_EMISSIVE_STRENGTH_DIRTY)
+            {
+                material->setEmissiveStrength(mEditor->getEmissiveStrength(), true);
+            }
+            else if ((reverted_flags & MATERIAL_EMISSIVE_STRENGTH_DIRTY) && revert_mat.notNull())
+            {
+                material->setEmissiveStrength(revert_mat->mEmissiveStrength, false);
+            }
+
+            if (changed_flags & MATERIAL_SPECULAR_FACTOR_DIRTY)
+            {
+                material->setSpecularFactor(mEditor->getSpecularFactor(), true);
+            }
+            else if ((reverted_flags & MATERIAL_SPECULAR_FACTOR_DIRTY) && revert_mat.notNull())
+            {
+                material->setSpecularFactor(revert_mat->mSpecularFactor, false);
+            }
+
+            if (changed_flags & MATERIAL_SPECULAR_COLOR_DIRTY)
+            {
+                material->setSpecularColorFactor(mEditor->getSpecularColorFactor(), true);
+            }
+            else if ((reverted_flags & MATERIAL_SPECULAR_COLOR_DIRTY) && revert_mat.notNull())
+            {
+                material->setSpecularColorFactor(revert_mat->mSpecularColorFactor, false);
+            }
+
+            if (changed_flags & MATERIAL_IOR_DIRTY)
+            {
+                material->setIOR(mEditor->getIOR(), true);
+            }
+            else if ((reverted_flags & MATERIAL_IOR_DIRTY) && revert_mat.notNull())
+            {
+                material->setIOR(revert_mat->mIOR, false);
+            }
+
+            if (changed_flags & MATERIAL_SPECULAR_TEX_DIRTY)
+            {
+                material->setSpecularId(mEditor->getSpecularId(), true);
+                LLUUID tracking_id = mEditor->getLocalTextureTrackingIdFromFlag(MATERIAL_SPECULAR_TEX_DIRTY);
+                if (tracking_id.notNull())
+                {
+                    LLLocalBitmapMgr::getInstance()->associateGLTFMaterial(tracking_id, material);
+                }
+            }
+            else if ((reverted_flags & MATERIAL_SPECULAR_TEX_DIRTY) && revert_mat.notNull())
+            {
+                material->setSpecularId(revert_mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR], false);
+                LLUUID tracking_id = mEditor->getLocalTextureTrackingIdFromFlag(MATERIAL_SPECULAR_TEX_DIRTY);
+                if (tracking_id.notNull())
+                {
+                    LLLocalBitmapMgr::getInstance()->associateGLTFMaterial(tracking_id, material);
+                }
+            }
+
             if (mObjectTE == te
                 && mObjectId == objectp->getID())
             {
                 mSuccess = true;
             }
             LLGLTFMaterialList::queueModify(objectp, te, material);
+
+            static LLCachedControl<bool> local_gltf_overrides(gSavedSettings, "LocalGLTFMaterialOverrides", false);
+            if (local_gltf_overrides)
+            {
+                // Apply override locally for immediate visual feedback.
+                // The server will sanitize fields it doesn't understand
+                // (e.g. KHR_materials_specular, KHR_materials_emissive_strength),
+                // so we need to apply locally to ensure those fields take effect.
+                objectp->setTEGLTFMaterialOverride(te, material);
+
+                // Update the region cache with extension data so that
+                // applyCacheMiscExtras won't clobber it during drawable rebuild.
+                LLViewerRegion* regionp = objectp->getRegion();
+                if (regionp)
+                {
+                    regionp->cacheGLTFOverrideSide(objectp->getLocalID(), objectp->getID(), te, material);
+                }
+            }
         }
         return true;
     }
@@ -3315,6 +3410,9 @@ private:
 
 void LLMaterialEditor::applyToSelection()
 {
+    LL_WARNS("GLTF") << "applyToSelection: mIsOverride=" << mIsOverride
+        << " mUnsavedChanges=0x" << std::hex << mUnsavedChanges
+        << " mRevertedChanges=0x" << mRevertedChanges << std::dec << LL_ENDL;
     if (!mIsOverride)
     {
         // Only apply if working with 'live' materials
@@ -3393,6 +3491,7 @@ void LLMaterialEditor::getGLTFMaterial(LLGLTFMaterial* mat)
     mat->mSpecularFactor = getSpecularFactor();
     mat->mSpecularColorFactor = getSpecularColorFactor();
     mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR] = getSpecularId();
+    mat->mIOR = getIOR();
 }
 
 void LLMaterialEditor::setFromGLTFMaterial(LLGLTFMaterial* mat)
@@ -3416,6 +3515,7 @@ void LLMaterialEditor::setFromGLTFMaterial(LLGLTFMaterial* mat)
     setSpecularFactor(mat->mSpecularFactor);
     setSpecularColorFactor(mat->mSpecularColorFactor);
     setSpecularId(mat->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_SPECULAR]);
+    setIOR(mat->mIOR);
 
     if (mat->hasLocalTextures())
     {

@@ -5694,7 +5694,14 @@ S32 LLViewerObject::initRenderMaterial(U8 te)
     if (need_render_material)
     {
         render_material = new LLFetchedGLTFMaterial(*base_material);
-        if (override_material) { render_material->applyOverride(*override_material); }
+        if (override_material)
+        {
+            LL_WARNS("GLTF") << "initRenderMaterial: te=" << (int)te
+                << " specularColorFactor=" << override_material->mSpecularColorFactor
+                << " metallicFactor=" << override_material->mMetallicFactor
+                << " override_ptr=" << (void*)override_material << LL_ENDL;
+            render_material->applyOverride(*override_material);
+        }
         render_material->clearFetchedTextures();
     }
     return tep->setGLTFRenderMaterial(render_material);
@@ -5741,6 +5748,7 @@ S32 LLViewerObject::setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* override_ma
                 LLLocalBitmapMgr::getInstance()->associateGLTFMaterial(val.first, override_mat);
             }
         }
+        refreshMaterials();
     }
 
     return retval;

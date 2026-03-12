@@ -2761,7 +2761,7 @@ LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLDataPackerB
     entry->setUpdateFlags(flags);
 
     return result;
-    }
+}
 
 LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLViewerObject* objectp, LLDataPackerBinaryBuffer &dp, U32 flags)
 {
@@ -2781,6 +2781,18 @@ void LLViewerRegion::cacheFullUpdateGLTFOverride(const LLGLTFOverrideCacheEntry 
     {
         mImpl->mGLTFOverridesLLSD.erase(local_id);
     }
+}
+
+void LLViewerRegion::cacheGLTFOverrideSide(U32 local_id, const LLUUID& object_id, S32 side, LLGLTFMaterial* material)
+{
+    auto& entry = mImpl->mGLTFOverridesLLSD[local_id];
+    entry.mLocalId = local_id;
+    if (entry.mObjectId.isNull())
+    {
+        entry.mObjectId = object_id;
+    }
+    entry.mGLTFMaterial[side] = material;
+    entry.mSides[side] = LLSD();
 }
 
 LLVOCacheEntry* LLViewerRegion::getCacheEntryForOctree(U32 local_id)

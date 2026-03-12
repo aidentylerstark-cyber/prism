@@ -67,6 +67,7 @@ LLGLTFMaterial::LLGLTFMaterial()
     mEmissiveStrength = 1.f;
     mSpecularFactor = 1.f;
     mSpecularColorFactor.set(1.f, 1.f, 1.f);
+    mIOR = 1.5f;
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
     {
         mTextureTransform[i].mScale.set(1.f, 1.f);
@@ -128,6 +129,7 @@ LLGLTFMaterial& LLGLTFMaterial::operator=(const LLGLTFMaterial& rhs)
     mEmissiveStrength = rhs.mEmissiveStrength;
     mSpecularFactor = rhs.mSpecularFactor;
     mSpecularColorFactor = rhs.mSpecularColorFactor;
+    mIOR = rhs.mIOR;
 
     mDoubleSided = rhs.mDoubleSided;
     mAlphaMode = rhs.mAlphaMode;
@@ -181,6 +183,7 @@ bool LLGLTFMaterial::operator==(const LLGLTFMaterial& rhs) const
         mEmissiveStrength == rhs.mEmissiveStrength &&
         mSpecularFactor == rhs.mSpecularFactor &&
         mSpecularColorFactor == rhs.mSpecularColorFactor &&
+        mIOR == rhs.mIOR &&
 
         mDoubleSided == rhs.mDoubleSided &&
         mAlphaMode == rhs.mAlphaMode &&
@@ -441,6 +444,18 @@ bool LLGLTFMaterial::setFromDocument(const boost::json::value& doc, S32 mat_inde
             if (spec_color_tex && spec_color_tex->is_object())
             {
                 readTextureInfo(doc, spec_color_tex->as_object(), GLTF_TEXTURE_INFO_SPECULAR);
+            }
+        }
+
+        // KHR_materials_ior
+        const auto* ior_ext = extensions.if_contains("KHR_materials_ior");
+        if (ior_ext && ior_ext->is_object())
+        {
+            const auto& ior_obj = ior_ext->as_object();
+            const auto* ior_val = ior_obj.if_contains("ior");
+            if (ior_val && ior_val->is_number())
+            {
+                mIOR = llmax((F32)ior_val->to_number<double>(), 0.f);
             }
         }
     }
@@ -718,6 +733,14 @@ boost::json::value LLGLTFMaterial::writeDocument() const
         }
     }
 
+    // KHR_materials_ior
+    if (mIOR != getDefaultIOR())
+    {
+        boost::json::object ior_ext;
+        ior_ext["ior"] = (double)mIOR;
+        mat_extensions["KHR_materials_ior"] = ior_ext;
+    }
+
     if (!mat_extensions.empty())
     {
         mat_obj["extensions"] = mat_extensions;
@@ -915,6 +938,15 @@ void LLGLTFMaterial::setSpecularFactor(F32 factor, bool for_override)
     mSpecularFactor = llclamp(factor, 0.f, for_override ? 1.f - FLT_EPSILON : 1.f);
 }
 
+void LLGLTFMaterial::setIOR(F32 ior, bool for_override)
+{
+    mIOR = llmax(ior, 0.f);
+    if (for_override && mIOR == getDefaultIOR())
+    {
+        mIOR -= FLT_EPSILON;
+    }
+}
+
 void LLGLTFMaterial::setSpecularColorFactor(const LLColor3& color, bool for_override)
 {
     mSpecularColorFactor = color;
@@ -997,6 +1029,11 @@ F32 LLGLTFMaterial::getDefaultSpecularFactor()
 LLColor3 LLGLTFMaterial::getDefaultSpecularColorFactor()
 {
     return sDefault.mSpecularColorFactor;
+}
+
+F32 LLGLTFMaterial::getDefaultIOR()
+{
+    return sDefault.mIOR;
 }
 
 LLVector2 LLGLTFMaterial::getDefaultTextureOffset()
@@ -1088,6 +1125,11 @@ void LLGLTFMaterial::applyOverride(const LLGLTFMaterial& override_mat)
     if (override_mat.mSpecularColorFactor != getDefaultSpecularColorFactor())
     {
         mSpecularColorFactor = override_mat.mSpecularColorFactor;
+    }
+
+    if (override_mat.mIOR != getDefaultIOR())
+    {
+        mIOR = override_mat.mIOR;
     }
 
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
@@ -1182,6 +1224,11 @@ void LLGLTFMaterial::getOverrideLLSD(const LLGLTFMaterial& override_mat, LLSD& d
     if (override_mat.mSpecularColorFactor != getDefaultSpecularColorFactor())
     {
         data["sc"] = override_mat.mSpecularColorFactor.getValue();
+    }
+
+    if (override_mat.mIOR != getDefaultIOR())
+    {
+        data["ior"] = override_mat.mIOR;
     }
 
     for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
@@ -1312,6 +1359,16 @@ void LLGLTFMaterial::applyOverrideLLSD(const LLSD& data)
         if (mSpecularColorFactor == getDefaultSpecularColorFactor())
         {
             mSpecularColorFactor.mV[0] -= FLT_EPSILON;
+        }
+    }
+
+    const LLSD& ior = data["ior"];
+    if (ior.isReal())
+    {
+        mIOR = (F32)ior.asReal();
+        if (mIOR == getDefaultIOR())
+        {
+            mIOR -= FLT_EPSILON;
         }
     }
 

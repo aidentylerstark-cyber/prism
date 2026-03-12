@@ -64,12 +64,7 @@ void main()
 
     if (GET_GBUFFER_FLAG(gb.gbufferFlag, GBUFFER_FLAG_HAS_PBR))
     {
-        vec3 orm = specCol.rgb;
-        float metallic = orm.b;
-        vec3 f0 = vec3(0.04);
-        vec3 baseColor = gb.albedo.rgb;
-
-        specCol = mix(f0, baseColor.rgb, metallic);
+        specCol = gb.specular.rgb;  // Already F0
     }
 
     vec4 collectedColor = vec4(0);

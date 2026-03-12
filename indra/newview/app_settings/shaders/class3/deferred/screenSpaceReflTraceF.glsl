@@ -55,7 +55,7 @@ void main()
 
     float glossiness;
     if (GET_GBUFFER_FLAG(gb.gbufferFlag, GBUFFER_FLAG_HAS_PBR))
-        glossiness = 1.0 - gb.specular.g;   // ORM: g = perceptualRoughness
+        glossiness = 1.0 - gb.specular.a;   // RT1.a = perceptualRoughness
     else
         glossiness = gb.specular.a;          // Legacy: a = glossiness
 

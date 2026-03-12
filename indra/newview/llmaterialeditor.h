@@ -223,6 +223,9 @@ class LLMaterialEditor : public LLPreview, public LLVOInventoryListener
     LLUUID getSpecularId();
     void setSpecularId(const LLUUID& id);
 
+    F32 getIOR();
+    void setIOR(F32 ior);
+
     void setCanSaveAs(bool value);
     void setCanSave(bool value);
     void setEnableEditing(bool can_modify);

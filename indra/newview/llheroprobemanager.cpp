@@ -218,13 +218,23 @@ void LLHeroProbeManager::update()
             face_normal *= hero->mDrawable->getWorldRotation();
             face_normal.normalize();
 
-            LLVector3 offset = camera_pos - hero_pos;
-            LLVector3 project = face_normal * (offset * face_normal);
-            LLVector3 reject  = offset - project;
-            LLVector3 point   = (reject - project) + hero_pos;
+            bool isPlanar = hero->getScale().mV[VZ] < 0.02f;
 
             LLVector4a probe_pos;
-            probe_pos.load3(point.mV);
+            if (isPlanar)
+            {
+                // Planar mirrors render from reflected camera position
+                LLVector3 offset = camera_pos - hero_pos;
+                LLVector3 project = face_normal * (offset * face_normal);
+                LLVector3 reject  = offset - project;
+                LLVector3 point   = (reject - project) + hero_pos;
+                probe_pos.load3(point.mV);
+            }
+            else
+            {
+                // Non-planar probes render from the hero object's center
+                probe_pos.load3(hero_pos.mV);
+            }
 
             mProbes[probeIdx]->mOrigin = probe_pos;
             mProbes[probeIdx]->mRadius = hero->getScale().magVec() * 0.5f;
@@ -306,14 +316,12 @@ void LLHeroProbeManager::renderProbes()
             if (probeIdx == 0)
             {
                 // Water probe — always planar
-                // Clip plane is set just above water to avoid Z-fighting
-                // with underwater fog at the water surface boundary.
                 F32 waterHeight = LLEnvironment::instance().getWaterHeight();
                 LLVector3 camera_pos = LLViewerCamera::instance().mOrigin;
-                LLVector3 waterPos(camera_pos.mV[VX], camera_pos.mV[VY], waterHeight);
-                LLVector3 waterNormal(0.f, 0.f, 1.f);
 
                 LLVector3 clipPos(camera_pos.mV[VX], camera_pos.mV[VY], waterHeight + 0.0001f);
+                LLVector3 waterNormal(0.f, 0.f, 1.f);
+
                 mCurrentClipPlane.setVec(clipPos, waterNormal);
                 mMirrorPosition = clipPos;
                 mMirrorNormal   = waterNormal;
@@ -354,7 +362,6 @@ void LLHeroProbeManager::renderProbes()
             bool dynamic = false;
             if (probeIdx == 0)
             {
-                // Water probe: render avatars only when hero probe detail allows dynamic content
                 dynamic = sDetail() > 0;
             }
             else
@@ -368,6 +375,9 @@ void LLHeroProbeManager::renderProbes()
             }
             else
             {
+                // Non-planar probes capture full environment from object center.
+                // Disable mirror clipping so mirrorClip() doesn't discard geometry.
+                mRenderingMirror = false;
                 for (U32 i = 0; i < 6; ++i)
                 {
                     if ((gFrameCount % rate) == (i % rate))
@@ -375,6 +385,7 @@ void LLHeroProbeManager::renderProbes()
                         updateProbeFace(mProbes[probeIdx], i, dynamic, near_clip);
                     }
                 }
+                mRenderingMirror = true;
             }
 
             generateRadiance(mProbes[probeIdx]);
@@ -410,8 +421,7 @@ void LLHeroProbeManager::updateProbeFace(LLReflectionMap* probe, U32 face, bool 
     }
     else
     {
-        probe->update(mRenderTarget.getWidth(), face, is_dynamic, near_clip,
-                      true, mCurrentClipPlane);
+        probe->update(mRenderTarget.getWidth(), face, is_dynamic, near_clip);
     }
 
     gPipeline.mRT = &gPipeline.mMainRT;
@@ -621,16 +631,16 @@ void LLHeroProbeManager::updateUniforms()
         if (pi >= (S32)mProbes.size() || mProbes[pi].isNull())
             continue;
 
-        // Transform probe origin to eye space
-        modelview.affineTransform(mProbes[pi]->mOrigin, oa);
-        mHeroData.heroSphere[pi].set(oa.getF32ptr());
-        mHeroData.heroSphere[pi].mV[3] = mProbes[pi]->mRadius;
-
         // heroParams: x=shape, y=cubeIndex
         mHeroData.heroParams[pi][1] = mProbes[pi]->mCubeIndex;
 
         if (pi == 0)
         {
+            // Water probe — use reflected origin for sphere
+            modelview.affineTransform(mProbes[pi]->mOrigin, oa);
+            mHeroData.heroSphere[pi].set(oa.getF32ptr());
+            mHeroData.heroSphere[pi].mV[3] = mProbes[pi]->mRadius;
+
             // Water probe — always planar
             mHeroData.heroParams[pi][0] = 2; // planar shape
 
@@ -687,7 +697,12 @@ void LLHeroProbeManager::updateUniforms()
                 mProbes[pi]->mRadius = hero->getScale().mV[0] * 0.5f;
             }
 
-            // Update sphere with correct radius
+            // Use hero object's actual position for sphere origin (not reflected camera position).
+            // This matches develop where autoAdjustOrigin() reset the origin before updateUniforms().
+            LLVector4a heroObjOrigin;
+            heroObjOrigin.load3(hero->getPositionAgent().mV);
+            modelview.affineTransform(heroObjOrigin, oa);
+            mHeroData.heroSphere[pi].set(oa.getF32ptr());
             mHeroData.heroSphere[pi].mV[3] = mProbes[pi]->mRadius;
 
             mHeroData.heroParams[pi][0] = 0; // box shape

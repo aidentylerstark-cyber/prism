@@ -52,6 +52,7 @@ namespace tut
         material.setNormalId(LLUUID::generateNewID());
         material.setOcclusionRoughnessMetallicId(LLUUID::generateNewID());
         material.setEmissiveId(LLUUID::generateNewID());
+        material.setSpecularId(LLUUID::generateNewID());
     }
 
     void apply_test_material_texture_transforms(LLGLTFMaterial& material)
@@ -76,6 +77,10 @@ namespace tut
         material.setEmissiveColorFactor(LLColor3(test_fraction_big, test_fraction_big, test_fraction_big));
         material.setMetallicFactor(test_fraction);
         material.setRoughnessFactor(test_fraction);
+        material.setEmissiveStrength(test_fraction);
+        material.setSpecularFactor(test_fraction);
+        material.setSpecularColorFactor(LLColor3(test_fraction_big, test_fraction_big, test_fraction_big));
+        material.setIOR(test_fraction);
     }
 
     LLGLTFMaterial create_test_material()
@@ -128,7 +133,7 @@ namespace tut
         ensure_equals("fields supported for GLTF (sizeof check)", sizeof(LLGLTFMaterial), 232);
 #endif
 #endif
-        ensure_equals("LLGLTFMaterial texture info count", (U32)LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT, 4);
+        ensure_equals("LLGLTFMaterial texture info count", (U32)LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT, 5);
     }
 
     // Test that occlusion and metallicRoughness are the same (They are different for asset validation. See lluploadmaterial.cpp)
@@ -399,6 +404,10 @@ namespace tut
         source_mat.mTrackingIdToLocalTexture[LLUUID::generateNewID()] = LLUUID::generateNewID();
         source_mat.mLocalTexDataDigest = 1;
         source_mat.mAlphaMode = LLGLTFMaterial::ALPHA_MODE_MASK;
+        source_mat.mEmissiveStrength = test_fraction;
+        source_mat.mSpecularFactor = test_fraction;
+        source_mat.mSpecularColorFactor.set(test_fraction_big, test_fraction_big, test_fraction_big);
+        source_mat.mIOR = test_fraction;
         source_mat.mDoubleSided = true;
 
         LLGLTFMaterial hash_mat;
@@ -413,6 +422,10 @@ namespace tut
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mMetallicFactor);
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mRoughnessFactor);
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mAlphaCutoff);
+        ENSURE_HASH_CHANGED(hash_mat, source_mat, mEmissiveStrength);
+        ENSURE_HASH_CHANGED(hash_mat, source_mat, mSpecularFactor);
+        ENSURE_HASH_CHANGED(hash_mat, source_mat, mSpecularColorFactor);
+        ENSURE_HASH_CHANGED(hash_mat, source_mat, mIOR);
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mAlphaMode);
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mDoubleSided);
         ENSURE_HASH_CHANGED(hash_mat, source_mat, mOverrideDoubleSided);

@@ -1401,17 +1401,44 @@ void LLGLTFMaterial::applyOverrideLLSD(const LLSD& data)
 LLUUID LLGLTFMaterial::getHash() const
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
-    // *HACK: hash the bytes of this object but do not include the ref count
-    // neither the local texture overrides (which is a map, with pointers to
-    // key/value pairs that would change from one LLGLTFMaterial instance to
-    // the other, even though the key/value pairs could be the same, and stored
-    // elsewhere in the memory heap or on the stack).
-    // Note: this does work properly to compare two LLGLTFMaterial instances
-    // only because the padding bytes between their member variables have been
-    // dutifully zeroed in the constructor. HB
-    const size_t offset = intptr_t(&mLocalTexDataDigest) - intptr_t(this);
-    return HBXXH128::digest((const void*)((const char*)this + offset),
-                            sizeof(*this) - offset);
+
+    // Hash each field explicitly rather than hashing raw object bytes.
+    // Raw byte hashing is fragile across compilers/platforms due to
+    // struct padding and std::map layout side effects.
+    HBXXH128 hash;
+
+    hash.update(&mLocalTexDataDigest, sizeof(mLocalTexDataDigest));
+
+    for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
+    {
+        hash.update(mTextureId[i].mData, UUID_BYTES);
+    }
+
+    for (U32 i = 0; i < GLTF_TEXTURE_INFO_COUNT; ++i)
+    {
+        TextureTransform::Pack packed;
+        mTextureTransform[i].getPacked(packed);
+        hash.update(packed, sizeof(packed));
+    }
+
+    hash.update(mBaseColor.mV, sizeof(mBaseColor.mV));
+    hash.update(mEmissiveColor.mV, sizeof(mEmissiveColor.mV));
+
+    hash.update(&mMetallicFactor, sizeof(mMetallicFactor));
+    hash.update(&mRoughnessFactor, sizeof(mRoughnessFactor));
+    hash.update(&mAlphaCutoff, sizeof(mAlphaCutoff));
+    hash.update(&mEmissiveStrength, sizeof(mEmissiveStrength));
+    hash.update(&mSpecularFactor, sizeof(mSpecularFactor));
+    hash.update(mSpecularColorFactor.mV, sizeof(mSpecularColorFactor.mV));
+    hash.update(&mIOR, sizeof(mIOR));
+
+    hash.update(&mAlphaMode, sizeof(mAlphaMode));
+    hash.update(&mDoubleSided, sizeof(mDoubleSided));
+    hash.update(&mOverrideDoubleSided, sizeof(mOverrideDoubleSided));
+    hash.update(&mOverrideAlphaMode, sizeof(mOverrideAlphaMode));
+
+    hash.finalize();
+    return hash.digest();
 }
 
 void LLGLTFMaterial::addLocalTextureTracking(const LLUUID& tracking_id, const LLUUID& tex_id)

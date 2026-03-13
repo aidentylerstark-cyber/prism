@@ -33,6 +33,7 @@ uniform float     blend_factor;
 uniform vec3      normScale;
 uniform float     blurMultiplier;
 uniform vec2      screen_res;
+uniform mat4      projection_matrix;
 
 in vec4 refCoord;
 in vec4 littleWave;
@@ -82,7 +83,13 @@ void main()
     float perceptualRoughness = blurMultiplier * blurMultiplier;
     float glossiness = 1.0 - perceptualRoughness;
 
-    vec2 tc = gl_FragCoord.xy / screen_res;
+    // Derive tc from view-space position via projection rather than
+    // gl_FragCoord / screen_res.  screen_res is the deferred buffer size,
+    // but this shader may render into a reduced-resolution SSR buffer whose
+    // viewport (and thus gl_FragCoord) is smaller, causing an off-centre
+    // vignette and incorrect screen-edge fade.
+    vec4 projPos = projection_matrix * vec4(vary_position, 1.0);
+    vec2 tc = (projPos.xy / projPos.w) * 0.5 + 0.5;
 
     vec4 ssrColor = vec4(0.0);
     tapScreenSpaceReflection(1, tc, vary_position, wave_ibl, ssrColor, sceneMap, glossiness);

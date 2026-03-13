@@ -37,6 +37,7 @@ uniform sampler2D diffuseMap;
 uniform sampler2D specularMap;
 uniform sampler2D sceneMap;
 uniform vec2 screen_res;
+uniform mat4 projection_matrix;
 uniform float roughnessFactor;
 uniform float minimum_alpha;
 
@@ -58,7 +59,10 @@ void main()
     float roughness = texture(specularMap, metallic_roughness_texcoord).g * roughnessFactor;
     float glossiness = 1.0 - roughness;
 
-    vec2 tc = gl_FragCoord.xy / screen_res;
+    // Derive tc from view-space position via projection rather than
+    // gl_FragCoord / screen_res — the SSR buffer may be at reduced resolution.
+    vec4 projPos = projection_matrix * vec4(vary_position, 1.0);
+    vec2 tc = (projPos.xy / projPos.w) * 0.5 + 0.5;
     vec3 norm = normalize(vary_normal);
 
     vec4 ssrColor = vec4(0.0);

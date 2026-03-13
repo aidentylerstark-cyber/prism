@@ -3740,6 +3740,12 @@ bool LLViewerRegion::avatarHoverHeightEnabled() const
     return ( mSimulatorFeatures.has("AvatarHoverHeightEnabled") &&
              mSimulatorFeatures["AvatarHoverHeightEnabled"].asBoolean());
 }
+
+bool LLViewerRegion::pbrExtensionsV1Enabled() const
+{
+    return ( mSimulatorFeatures.has("PBRExtensionsV1") &&
+             mSimulatorFeatures["PBRExtensionsV1"].asBoolean());
+}
 /* Static Functions */
 
 void log_capabilities(const CapabilityMap &capmap)

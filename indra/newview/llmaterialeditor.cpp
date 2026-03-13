@@ -1001,6 +1001,16 @@ void LLMaterialEditor::setEnableEditing(bool can_modify)
     mMetallicTextureCtrl->setEnabled(can_modify);
     mEmissiveTextureCtrl->setEnabled(can_modify);
     mNormalTextureCtrl->setEnabled(can_modify);
+
+    // PBR Extensions V1 — hide controls when server flag is absent
+    bool pbr_ext = false;
+    LLViewerRegion* region = gAgent.getRegion();
+    if (region)
+        pbr_ext = region->pbrExtensionsV1Enabled();
+
+    childSetVisible("specular_layout_pnl", pbr_ext);
+    childSetVisible("emissive_strength_lbl", pbr_ext);
+    childSetVisible("emissive strength", pbr_ext);
 }
 
 void LLMaterialEditor::subscribeToLocalTexture(S32 dirty_flag, const LLUUID& tracking_id)

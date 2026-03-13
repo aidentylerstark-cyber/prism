@@ -307,6 +307,9 @@ float tapScreenSpaceReflection(
         if (transformedReflDir.z >= 0.5)
             continue;
 
+        // Fade rays pointing back toward camera to avoid sharp SSR boundary.
+        float cameraFacingFade = 1.0 - smoothstep(0.45, 0.5, transformedReflDir.z);
+
         // Push ray origin along surface normal to prevent self-intersection.
         // Deterministic (not random) to avoid per-pixel noise.
         // Scales with distance to match depth-buffer precision degradation.
@@ -353,6 +356,9 @@ float tapScreenSpaceReflection(
         float confidence = 1.0 - smoothstep(0.0, maxThickness, hitDistance);
         confidence *= confidence;
 
+        if (confidence < 0.95)
+            continue;
+
         // Short-ray back-face check (Godot-style):
         // For rays that traveled < 3 pixels, compute a geometric normal at the
         // hit point from depth buffer cross-derivatives. Reject if the reflected
@@ -389,7 +395,8 @@ float tapScreenSpaceReflection(
         // Fade-in: suppress near-origin artifacts from self-intersection.
         float fadeIn = smoothstep(0.0, 0.01, rayLen);
         float rayFade = 1.0 - smoothstep(0.6, 1.0, rayLen);
-        float sampleFade = edgeFade * zFade * fadeIn * rayFade * confidence;
+
+        float sampleFade = edgeFade * zFade * fadeIn * rayFade * confidence * cameraFacingFade;
 
         accumColor += sampledColor.rgb * sampleFade;
         accumFade += sampleFade;

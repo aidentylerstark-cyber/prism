@@ -2392,6 +2392,13 @@ if (LL_TESTS)
           LL_TEST_ADDITIONAL_LIBRARIES ${test_libs}
   )
 
+  set_property( SOURCE
+          llworldmap.cpp
+          llworldmipmap.cpp
+          APPEND PROPERTY
+          LL_TEST_ADDITIONAL_LIBRARIES llprimitive
+  )
+
   LL_ADD_PROJECT_UNIT_TESTS(${VIEWER_BINARY_NAME} "${viewer_TEST_SOURCE_FILES}")
 
   #set(TEST_DEBUG on)

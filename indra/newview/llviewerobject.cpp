@@ -1529,7 +1529,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                         U16 param_type;
                         S32 param_size;
                         dp.unpackU16(param_type, "param_type");
-                        dp.unpackBinaryData(param_block, param_size, "param_data");
+                        dp.unpackBinaryData(param_block, MAX_OBJECT_PARAMS_SIZE, param_size, "param_data");
                         //LL_INFOS() << "Param type: " << param_type << ", Size: " << param_size << LL_ENDL;
                         LLDataPackerBinaryBuffer dp2(param_block, param_size);
                         unpackParameterEntry(param_type, &dp2);
@@ -1786,7 +1786,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     dp->unpackU32(size, "ScratchPadSize");
                     delete [] mData;
                     mData = new U8[size];
-                    dp->unpackBinaryData((U8 *)mData, sp_size, "PartData");
+                    dp->unpackBinaryData((U8 *)mData, size, sp_size, "PartData");
                 }
                 else
                 {
@@ -1859,7 +1859,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     U16 param_type;
                     S32 param_size;
                     dp->unpackU16(param_type, "param_type");
-                    dp->unpackBinaryData(param_block, param_size, "param_data");
+                    dp->unpackBinaryData(param_block, MAX_OBJECT_PARAMS_SIZE, param_size, "param_data");
                     //LL_INFOS() << "Param type: " << param_type << ", Size: " << param_size << LL_ENDL;
                     LLDataPackerBinaryBuffer dp2(param_block, param_size);
                     unpackParameterEntry(param_type, &dp2);
@@ -5694,7 +5694,14 @@ S32 LLViewerObject::initRenderMaterial(U8 te)
     if (need_render_material)
     {
         render_material = new LLFetchedGLTFMaterial(*base_material);
-        if (override_material) { render_material->applyOverride(*override_material); }
+        if (override_material)
+        {
+            LL_WARNS("GLTF") << "initRenderMaterial: te=" << (int)te
+                << " specularColorFactor=" << override_material->mSpecularColorFactor
+                << " metallicFactor=" << override_material->mMetallicFactor
+                << " override_ptr=" << (void*)override_material << LL_ENDL;
+            render_material->applyOverride(*override_material);
+        }
         render_material->clearFetchedTextures();
     }
     return tep->setGLTFRenderMaterial(render_material);
@@ -5741,6 +5748,7 @@ S32 LLViewerObject::setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* override_ma
                 LLLocalBitmapMgr::getInstance()->associateGLTFMaterial(val.first, override_mat);
             }
         }
+        refreshMaterials();
     }
 
     return retval;

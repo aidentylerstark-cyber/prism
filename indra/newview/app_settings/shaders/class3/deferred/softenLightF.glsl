@@ -83,11 +83,9 @@ uniform vec4 waterPlane;
 uniform float sky_hdr_scale;
 
 void calcHalfVectors(vec3 lv, vec3 n, vec3 v, out vec3 h, out vec3 l, out float nh, out float nl, out float nv, out float vh, out float lightDist);
-void calcDiffuseSpecular(vec3 baseColor, float metallic, inout vec3 diffuseColor, inout vec3 specularColor);
-
 vec3 pbrBaseLight(vec3 diffuseColor,
                   vec3 specularColor,
-                  float metallic,
+                  float specularWeight,
                   vec3 pos,
                   vec3 norm,
                   float perceptualRoughness,
@@ -164,10 +162,11 @@ void main()
 
     if (GET_GBUFFER_FLAG(gb.gbufferFlag, GBUFFER_FLAG_HAS_PBR))
     {
-        vec3 orm = spec.rgb;
-        float perceptualRoughness = orm.g;
-        float metallic = orm.b;
-        float ao = orm.r;
+        vec3 diffuseColor = baseColor.rgb;          // RT0.rgb is pre-computed diffuse
+        float specularWeight = baseColor.a;          // RT0.a
+        vec3 specularColor = spec.rgb;               // RT1.rgb is F0
+        float perceptualRoughness = spec.a;          // RT1.a
+        float ao = gb.occlusion;                     // RT2.b
 
         vec3  irradiance = amblit_linear;
 
@@ -178,12 +177,8 @@ void main()
 
         adjustIrradiance(irradiance, ambocc);
 
-        vec3 diffuseColor;
-        vec3 specularColor;
-        calcDiffuseSpecular(baseColor.rgb, metallic, diffuseColor, specularColor);
-
         vec3 v = -normalize(pos.xyz);
-        color = pbrBaseLight(diffuseColor, specularColor, metallic, v, gb.normal, perceptualRoughness, light_dir, sunlit_linear, scol, radiance, irradiance, colorEmissive, ao, additive, atten);
+        color = pbrBaseLight(diffuseColor, specularColor, specularWeight, v, gb.normal, perceptualRoughness, light_dir, sunlit_linear, scol, radiance, irradiance, colorEmissive, ao, additive, atten);
     }
     else if (GET_GBUFFER_FLAG(gb.gbufferFlag, GBUFFER_FLAG_HAS_HDRI))
     {

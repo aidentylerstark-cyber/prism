@@ -31,26 +31,6 @@
 #include "../llgltfmaterial.h"
 #include "lluuid.cpp"
 
-// Import & define single-header gltf import/export lib
-#define TINYGLTF_IMPLEMENTATION
-#define TINYGLTF_USE_CPP14  // default is C++ 11
-
-// tinygltf by default loads image files using STB
-#define STB_IMAGE_IMPLEMENTATION
-// to use our own image loading:
-// 1. replace this definition with TINYGLTF_NO_STB_IMAGE
-// 2. provide image loader callback with TinyGLTF::SetImageLoader(LoadimageDataFunction LoadImageData, void *user_data)
-
-// tinygltf saves image files using STB
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-// similarly, can override with TINYGLTF_NO_STB_IMAGE_WRITE and TinyGLTF::SetImageWriter(fxn, data)
-
-// Disable reading external images to prevent warnings and speed up the tests.
-// We don't need this for the tests, but still need the filesystem
-// implementation to be defined in order for llprimitive to link correctly.
-#define TINYGLTF_NO_EXTERNAL_IMAGE 1
-
-#include "tinygltf/tiny_gltf.h"
 
 namespace tut
 {

@@ -80,11 +80,6 @@ endif ()
 
 set(viewer_SOURCE_FILES
     gltfscenemanager.cpp
-    gltf/asset.cpp
-    gltf/accessor.cpp
-    gltf/primitive.cpp
-    gltf/animation.cpp
-    gltf/llgltfloader.cpp
     groupchatlistener.cpp
     llaccountingcostmanager.cpp
     llaisapi.cpp
@@ -610,7 +605,7 @@ set(viewer_SOURCE_FILES
     lltexturestats.cpp
     lltextureview.cpp
     llthumbnailctrl.cpp
-    lltinygltfhelper.cpp
+    llgltfhelper.cpp
     lltoast.cpp
     lltoastalertpanel.cpp
     lltoastgroupnotifypanel.cpp
@@ -757,12 +752,6 @@ set(viewer_HEADER_FILES
     ViewerInstall.cmake
     gltfscenemanager.h
     groupchatlistener.h
-    gltf/asset.h
-    gltf/accessor.h
-    gltf/buffer_util.h
-    gltf/primitive.h
-    gltf/animation.h
-    gltf/llgltfloader.h
     llaccountingcost.h
     llaccountingcostmanager.h
     llaisapi.h
@@ -1281,7 +1270,7 @@ set(viewer_HEADER_FILES
     lltexturestats.h
     lltextureview.h
     llthumbnailctrl.h
-    lltinygltfhelper.h
+    llgltfhelper.h
     lltoast.h
     lltoastalertpanel.h
     lltoastgroupnotifypanel.h

@@ -93,9 +93,9 @@ void LLPrimTextureList::copy(const LLPrimTextureList& other_list)
     if (this_size > other_size)
     {
         // remove the extra entries
-        for (U8 index = this_size; index > other_size; --index)
+        for (U8 index = other_size; index < this_size; ++index)
         {
-            delete mEntryList[index-1];
+            delete mEntryList[index];
         }
         mEntryList.resize(other_size);
         this_size = other_size;
@@ -428,7 +428,7 @@ void LLPrimTextureList::setSize(U8 new_size)
     }
     else if (new_size < current_size)
     {
-        for (U8 index = current_size-1; index >= new_size; --index)
+        for (U8 index = new_size; index < current_size; ++index)
         {
             delete mEntryList[index];
         }

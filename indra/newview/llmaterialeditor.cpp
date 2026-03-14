@@ -792,7 +792,7 @@ void LLMaterialEditor::setEmissiveColor(const LLColor4& color)
 
 F32 LLMaterialEditor::getEmissiveStrength()
 {
-    return childGetValue("emissive strength").asReal();
+    return (F32)childGetValue("emissive strength").asReal();
 }
 
 void LLMaterialEditor::setEmissiveStrength(F32 strength)

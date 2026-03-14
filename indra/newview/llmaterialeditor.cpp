@@ -836,7 +836,7 @@ void LLMaterialEditor::setDoubleSided(bool double_sided)
 
 F32 LLMaterialEditor::getSpecularFactor()
 {
-    return childGetValue("specular factor").asReal();
+    return (F32)childGetValue("specular factor").asReal();
 }
 
 void LLMaterialEditor::setSpecularFactor(F32 factor)
@@ -866,7 +866,7 @@ void LLMaterialEditor::setSpecularId(const LLUUID& id)
 
 F32 LLMaterialEditor::getIOR()
 {
-    return childGetValue("ior").asReal();
+    return (F32)childGetValue("ior").asReal();
 }
 
 void LLMaterialEditor::setIOR(F32 ior)

@@ -56,6 +56,8 @@
 
 #if LL_WINDOWS
 #include "lldxhardware.h"
+#include <d3d11.h>
+#include <dxgi.h>
 #endif
 
 #ifdef _DEBUG
@@ -235,6 +237,14 @@ PFNWGLBLITCONTEXTFRAMEBUFFERAMDPROC             wglBlitContextFramebufferAMD = n
 // WGL_EXT_swap_control
 PFNWGLSWAPINTERVALEXTPROC    wglSwapIntervalEXT = nullptr;
 PFNWGLGETSWAPINTERVALEXTPROC wglGetSwapIntervalEXT = nullptr;
+
+// WGL_NV_DX_interop
+PFNWGLDXOPENDEVICENVPROC          wglDXOpenDeviceNV = nullptr;
+PFNWGLDXCLOSEDEVICENVPROC         wglDXCloseDeviceNV = nullptr;
+PFNWGLDXREGISTEROBJECTNVPROC      wglDXRegisterObjectNV = nullptr;
+PFNWGLDXUNREGISTEROBJECTNVPROC    wglDXUnregisterObjectNV = nullptr;
+PFNWGLDXLOCKOBJECTSNVPROC         wglDXLockObjectsNV = nullptr;
+PFNWGLDXUNLOCKOBJECTSNVPROC       wglDXUnlockObjectsNV = nullptr;
 
 #endif
 
@@ -1057,6 +1067,57 @@ void LLGLManager::initWGL()
     if( !glh_init_extensions("WGL_ARB_render_texture") )
     {
         LL_WARNS("RenderInit") << "No ARB WGL render texture extensions" << LL_ENDL;
+    }
+
+    mHasNVDXInterop = ExtensionExists("WGL_NV_DX_interop", gGLHExts.mSysExts);
+    if (mHasNVDXInterop)
+    {
+        wglDXOpenDeviceNV = (PFNWGLDXOPENDEVICENVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXOpenDeviceNV");
+        wglDXCloseDeviceNV = (PFNWGLDXCLOSEDEVICENVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXCloseDeviceNV");
+        wglDXRegisterObjectNV = (PFNWGLDXREGISTEROBJECTNVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXRegisterObjectNV");
+        wglDXUnregisterObjectNV = (PFNWGLDXUNREGISTEROBJECTNVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXUnregisterObjectNV");
+        wglDXLockObjectsNV = (PFNWGLDXLOCKOBJECTSNVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXLockObjectsNV");
+        wglDXUnlockObjectsNV = (PFNWGLDXUNLOCKOBJECTSNVPROC)GLH_EXT_GET_PROC_ADDRESS("wglDXUnlockObjectsNV");
+
+        // Discover which adapter the GL context lives on by probing wglDXOpenDeviceNV
+        IDXGIFactory1* dxgi_factory = nullptr;
+        if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&dxgi_factory)))
+        {
+            IDXGIAdapter* adapter = nullptr;
+            for (UINT i = 0; dxgi_factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i)
+            {
+                ID3D11Device* probe_device = nullptr;
+                HRESULT hr = D3D11CreateDevice(
+                    adapter, D3D_DRIVER_TYPE_UNKNOWN,
+                    nullptr, 0, nullptr, 0,
+                    D3D11_SDK_VERSION,
+                    &probe_device, nullptr, nullptr);
+
+                if (SUCCEEDED(hr) && probe_device)
+                {
+                    HANDLE probe_handle = wglDXOpenDeviceNV(probe_device);
+                    if (probe_handle)
+                    {
+                        // This adapter matches the GL context
+                        DXGI_ADAPTER_DESC adesc;
+                        if (SUCCEEDED(adapter->GetDesc(&adesc)))
+                        {
+                            mGLAdapterLuidHigh = adesc.AdapterLuid.HighPart;
+                            mGLAdapterLuidLow = adesc.AdapterLuid.LowPart;
+                            LL_INFOS("RenderInit") << "GL adapter LUID: "
+                                << std::hex << mGLAdapterLuidHigh << ":" << mGLAdapterLuidLow << LL_ENDL;
+                        }
+                        wglDXCloseDeviceNV(probe_handle);
+                        probe_device->Release();
+                        adapter->Release();
+                        break;
+                    }
+                    probe_device->Release();
+                }
+                adapter->Release();
+            }
+            dxgi_factory->Release();
+        }
     }
 #endif
 }

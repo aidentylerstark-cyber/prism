@@ -1165,7 +1165,7 @@ bool LLImageGL::setSubImage(const U8* datap, S32 data_width, S32 data_height, S3
                    << " getHeight() " << getHeight()
                    << LL_ENDL;
         }
-
+        
         if ((x_pos + width) > data_width ||
             (y_pos + height) > data_height)
         {
@@ -1179,7 +1179,6 @@ bool LLImageGL::setSubImage(const U8* datap, S32 data_width, S32 data_height, S3
                    << " source_height " << data_height
                    << LL_ENDL;
         }
-
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, data_width);
         stop_glerror();
@@ -1489,7 +1488,7 @@ void LLImageGL::setManualImage(U32 target, S32 miplevel, S32 intformat, S32 widt
 }
 
 //create an empty GL texture: just create a texture name
-//the texture is assiciate with some image by calling glTexImage outside LLImageGL
+//the texture is associated with some image by calling glTexImage outside LLImageGL
 bool LLImageGL::createGLTexture()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;

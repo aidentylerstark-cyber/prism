@@ -100,6 +100,9 @@ public:
     // Vendor-specific extensions
     bool mHasAMDAssociations = false;
     bool mHasNVXGpuMemoryInfo = false;
+    bool mHasNVDXInterop = false;
+    S32  mGLAdapterLuidHigh = 0;
+    U32  mGLAdapterLuidLow = 0;
 
     bool mIsAMD;
     bool mIsNVIDIA;

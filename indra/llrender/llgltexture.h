@@ -138,6 +138,10 @@ public:
     void       setTexName(LLGLuint); // for forcing w/ externally created textures only
     void       setTarget(const LLGLenum target, const LLTexUnit::eTextureType bind_target);
 
+    bool       createGLTextureFromHandle(void* handle, S32 width, S32 height, LLGLuint* tex_name = nullptr);
+    bool       hasInteropTexture() const { return mInteropGLHandle != nullptr; }
+    void       releaseInteropResources();
+
     LLTexUnit::eTextureAddressMode getAddressMode(void) const ;
     S32        getMaxDiscardLevel() const;
     S32        getDiscardLevel() const;
@@ -194,8 +198,19 @@ protected:
 protected:
     LLGLTextureState  mTextureState ;
 
-
+#if LL_WINDOWS
+    // NV_DX_interop resources kept alive while the GL texture is in use
+    void* mInteropDevice = nullptr;     // ID3D11Device1*
+    void* mInteropContext = nullptr;    // ID3D11DeviceContext*
+    void* mInteropTexture = nullptr;    // ID3D11Texture2D*
+    void* mInteropGLDevice = nullptr;   // HANDLE from wglDXOpenDeviceNV
+    void* mInteropGLHandle = nullptr;   // HANDLE from wglDXRegisterObjectNV
+    LLGLuint mInteropSrcTex = 0;        // GL name from NV_DX_interop registration
+    LLGLuint mInteropBlitFBO = 0;       // FBO for flip blit
+    LLGLuint mInteropOutputTex = 0;     // Persistent flipped GL texture
+#endif
 };
 
 #endif // LL_GL_TEXTURE_H
+
 

@@ -127,6 +127,7 @@ private:
 #if LL_WINDOWS
     DWORD mViewerProcessID;
     LUID mViewerAdapterLuid;
+    bool mSharedTextureEnable;
     ID3D11Device* mD3DDevice;
     ID3D11Device1* mD3DDevice1;
     ID3D11DeviceContext* mD3DContext;
@@ -178,6 +179,7 @@ MediaPluginBase(host_send_func, host_user_data)
 #if LL_WINDOWS
     mViewerProcessID = 0;
     mViewerAdapterLuid = {};
+    mSharedTextureEnable = false;
     mD3DDevice = nullptr;
     mD3DDevice1 = nullptr;
     mD3DContext = nullptr;
@@ -707,6 +709,7 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 mViewerProcessID = message_in.getValueU32("viewer_pid");
                 mViewerAdapterLuid.HighPart = (LONG)message_in.getValueS32("adapter_luid_high");
                 mViewerAdapterLuid.LowPart = (DWORD)message_in.getValueU32("adapter_luid_low");
+                mSharedTextureEnable = message_in.getValueBoolean("shared_texture_enable");
 #endif
                 // event callbacks from Dullahan
                 mCEFLib->setOnPageChangedCallback(std::bind(&MediaPluginCEF::onPageChangedCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
@@ -812,7 +815,7 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 settings.use_adapter_luid           = true;
                 settings.adapter_luid.high_part     = mViewerAdapterLuid.HighPart;
                 settings.adapter_luid.low_part      = mViewerAdapterLuid.LowPart;
-                settings.shared_texture_enable      = true;
+                settings.shared_texture_enable      = mSharedTextureEnable;
 #endif
 
                 std::vector<std::string> custom_schemes(1, "secondlife");

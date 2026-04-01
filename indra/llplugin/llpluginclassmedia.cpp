@@ -67,7 +67,7 @@ LLPluginClassMedia::~LLPluginClassMedia()
     reset();
 }
 
-bool LLPluginClassMedia::init(const std::string &launcher_filename, const std::string &plugin_dir, const std::string &plugin_filename, bool debug, S32 adapter_luid_high, U32 adapter_luid_low)
+bool LLPluginClassMedia::init(const std::string &launcher_filename, const std::string &plugin_dir, const std::string &plugin_filename, bool debug, S32 adapter_luid_high, U32 adapter_luid_low, bool shared_texture_enable)
 {
     LL_DEBUGS("Plugin") << "launcher: " << launcher_filename << LL_ENDL;
     LL_DEBUGS("Plugin") << "dir: " << plugin_dir << LL_ENDL;
@@ -85,6 +85,7 @@ bool LLPluginClassMedia::init(const std::string &launcher_filename, const std::s
     message.setValueS32("adapter_luid_high", adapter_luid_high);
     message.setValueU32("adapter_luid_low", adapter_luid_low);
 #endif
+    message.setValueBoolean("shared_texture_enable", shared_texture_enable);
     sendMessage(message);
 
     mPlugin->init(launcher_filename, plugin_dir, plugin_filename, debug);

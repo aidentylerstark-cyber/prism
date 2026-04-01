@@ -1884,7 +1884,7 @@ LLPluginClassMedia* LLViewerMediaImpl::newSourceFromMediaType(std::string media_
 
             const std::string plugin_dir = gDirUtilp->getLLPluginDir();
             if (media_source->init(launcher_name, plugin_dir, plugin_name, gSavedSettings.getBOOL("PluginAttachDebuggerToPlugins"),
-                                  gGLManager.mGLAdapterLuidHigh, gGLManager.mGLAdapterLuidLow))
+                                  gGLManager.mGLAdapterLuidHigh, gGLManager.mGLAdapterLuidLow, gGLManager.mHasNVDXInterop))
             {
                 return media_source;
             }

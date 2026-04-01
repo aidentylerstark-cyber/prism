@@ -48,7 +48,8 @@ public:
                       const std::string &plugin_filename,
                       bool debug,
                       S32 adapter_luid_high = 0,
-                      U32 adapter_luid_low = 0);
+                      U32 adapter_luid_low = 0,
+                      bool shared_texture_enable = false);
 
     // undoes everything init() didm called by the media manager when destroying a source
     void reset();

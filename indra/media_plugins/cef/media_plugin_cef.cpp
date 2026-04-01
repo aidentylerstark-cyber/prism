@@ -812,6 +812,7 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 settings.use_adapter_luid           = true;
                 settings.adapter_luid.high_part     = mViewerAdapterLuid.HighPart;
                 settings.adapter_luid.low_part      = mViewerAdapterLuid.LowPart;
+                settings.shared_texture_enable      = true;
 #endif
 
                 std::vector<std::string> custom_schemes(1, "secondlife");

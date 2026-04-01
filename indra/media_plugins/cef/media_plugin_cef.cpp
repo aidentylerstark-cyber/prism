@@ -808,9 +808,11 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 settings.log_verbose = mCefLogVerbose;
                 settings.autoplay_without_gesture = true;
 
+#if LL_WINDOWS
                 settings.use_adapter_luid           = true;
                 settings.adapter_luid.high_part     = mViewerAdapterLuid.HighPart;
                 settings.adapter_luid.low_part      = mViewerAdapterLuid.LowPart;
+#endif
 
                 std::vector<std::string> custom_schemes(1, "secondlife");
                 mCEFLib->setCustomSchemes(custom_schemes);

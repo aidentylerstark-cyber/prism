@@ -662,9 +662,9 @@ bool LLGLTexture::createGLTextureFromHandle(void* handle, S32 width, S32 height,
 #endif
 }
 
-#if LL_WINDOWS
 void LLGLTexture::releaseInteropResources()
 {
+#if LL_WINDOWS
     if (mInteropBlitFBO)
     {
         glDeleteFramebuffers(1, &mInteropBlitFBO);
@@ -706,8 +706,8 @@ void LLGLTexture::releaseInteropResources()
         ((ID3D11Device1*)mInteropDevice)->Release();
         mInteropDevice = nullptr;
     }
-}
 #endif
+}
 
 void LLGLTexture::setTexelsPerImage()
 {

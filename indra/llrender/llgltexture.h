@@ -139,7 +139,13 @@ public:
     void       setTarget(const LLGLenum target, const LLTexUnit::eTextureType bind_target);
 
     bool       createGLTextureFromHandle(void* handle, S32 width, S32 height, LLGLuint* tex_name = nullptr);
-    bool       hasInteropTexture() const { return mInteropGLHandle != nullptr; }
+    bool       hasInteropTexture() const {
+#ifdef LL_WINDOWS
+        return mInteropGLHandle != nullptr;
+#else
+        return false;
+#endif
+    }
     void       releaseInteropResources();
 
     LLTexUnit::eTextureAddressMode getAddressMode(void) const ;

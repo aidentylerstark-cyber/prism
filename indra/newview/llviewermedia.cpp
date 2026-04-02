@@ -3642,8 +3642,8 @@ void LLViewerMediaImpl::handleMediaEvent(LLPluginClassMedia* plugin, LLPluginCla
                 {
                     // Pass power-of-two dimensions so the copy texture matches
                     // what the renderer expects (content in top-left sub-region)
-                    S32 tex_width = plugin->getTextureWidth();
-                    S32 tex_height = plugin->getTextureHeight();
+                    S32 tex_width = llmin(plugin->getTextureWidth(), gGLManager.mGLMaxTextureSize);
+                    S32 tex_height = llmin(plugin->getTextureHeight(), gGLManager.mGLMaxTextureSize);
 
                     LLGLuint tex_name = 0;
                     if (media_tex->createGLTextureFromHandle(accel_handle, tex_width, tex_height, &tex_name))

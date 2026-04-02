@@ -381,16 +381,6 @@ void LLPluginClassMedia::setSizeInternal(void)
         mRequestedMediaHeight = nextPowerOf2(mRequestedMediaHeight);
     }
 
-#if LL_DARWIN
-    if (!gHiDPISupport)
-#endif
-    {
-        if (mRequestedMediaWidth > 2048)
-            mRequestedMediaWidth = 2048;
-
-        if (mRequestedMediaHeight > 2048)
-            mRequestedMediaHeight = 2048;
-    }
 }
 
 void LLPluginClassMedia::setAutoScale(bool auto_scale)

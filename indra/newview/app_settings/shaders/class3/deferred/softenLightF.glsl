@@ -132,7 +132,7 @@ void main()
 #endif
 
 #if defined(HAS_SUN_SHADOW)
-    float scol       = max(scol_ambocc.r, baseColor.a);
+    float scol       = scol_ambocc.r;
 #else
     float scol = 1.0;
 #endif
@@ -200,6 +200,9 @@ void main()
     {
         // legacy shaders are still writng sRGB to gbuffer
         baseColor.rgb = srgb_to_linear(baseColor.rgb);
+
+        // For legacy surfaces, baseColor.a indicates fullbright (skip shadows)
+        scol = max(scol, baseColor.a);
 
         spec.rgb = srgb_to_linear(spec.rgb);
 

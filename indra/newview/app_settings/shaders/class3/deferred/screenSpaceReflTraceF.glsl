@@ -25,7 +25,8 @@
 
 /*[EXTRA_CODE_HERE]*/
 
-out vec4 frag_color;
+layout(location = 0) out vec4 frag_color;
+layout(location = 1) out float frag_cone_mip;
 
 in vec2 vary_fragcoord;
 in vec3 camera_ray;
@@ -36,7 +37,7 @@ GBufferInfo getGBuffer(vec2 screenpos);
 float getDepth(vec2 pos_screen);
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, out float coneMipOut, sampler2D source, float glossiness);
 
 void main()
 {
@@ -47,6 +48,7 @@ void main()
     if (depth >= 1.0)
     {
         frag_color = vec4(0.0);
+        frag_cone_mip = 0.0;
         return;
     }
 
@@ -60,6 +62,8 @@ void main()
         glossiness = gb.specular.a;          // Legacy: a = glossiness
 
     vec4 ssrColor = vec4(0.0);
-    tapScreenSpaceReflection(1, tc, pos, gb.normal, ssrColor, sceneMap, glossiness);
+    float coneMip = 0.0;
+    tapScreenSpaceReflection(1, tc, pos, gb.normal, ssrColor, coneMip, sceneMap, glossiness);
     frag_color = ssrColor;
+    frag_cone_mip = coneMip;
 }

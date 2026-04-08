@@ -1321,6 +1321,7 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("environmentMap");
     mReservedUniforms.push_back("sceneMap");
     mReservedUniforms.push_back("sceneDepth");
+    mReservedUniforms.push_back("ssrConeMipMap");
     mReservedUniforms.push_back("reflectionProbes");
     mReservedUniforms.push_back("irradianceProbes");
     mReservedUniforms.push_back("heroProbes");

@@ -36,8 +36,9 @@ uniform float max_probe_lod;
 uniform bool transparent_surface;
 
 uniform float ssrMipScale;
+uniform sampler2D ssrConeMipMap;
 
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, out float coneMipOut, sampler2D source, float glossiness);
 
 uniform int classic_mode;
 
@@ -822,11 +823,16 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
 
             if (transparent)
             {
-                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+                float unusedMip;
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, unusedMip, sceneMap, glossiness);
             }
             else
             {
-                ssr = textureLod(sceneMap, tc, roughness * ssrMipScale);
+                // Contact hardening: read cone mip from MRT1 for LOD selection,
+                // sample color+confidence from MRT0 mip chain.
+                float coneMip = texture(ssrConeMipMap, tc).r * ssrMipScale;
+                float ssrLod = clamp(coneMip, 0.0, ssrMipScale);
+                ssr = textureLod(sceneMap, tc, ssrLod);
             }
 
             if (ssr.a > 0.001)
@@ -953,11 +959,14 @@ void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout 
 
             if (transparent)
             {
-                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, sceneMap, glossiness);
+                float unusedMip;
+                tapScreenSpaceReflection(1, tc, pos.xyz, norm, ssr, unusedMip, sceneMap, glossiness);
             }
             else
             {
-                float ssrLod = clamp(log2(1.0 + roughness * roughness * ssrMipScale * 4.0), 0.0, ssrMipScale);
+                // Contact hardening: read cone mip from MRT1, sample color from MRT0.
+                float coneMip = texture(ssrConeMipMap, tc).r * ssrMipScale;
+                float ssrLod = clamp(coneMip, 0.0, ssrMipScale);
                 ssr = textureLod(sceneMap, tc, ssrLod);
             }
 

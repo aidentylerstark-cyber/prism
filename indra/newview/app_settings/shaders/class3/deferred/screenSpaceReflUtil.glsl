@@ -43,6 +43,7 @@ uniform float maxZDepth;
 uniform float maxRoughness;
 uniform vec2 ssrJitterOffset;
 uniform int hizMipCount;
+uniform float ssrMipScale;
 
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 
@@ -225,9 +226,11 @@ float tapScreenSpaceReflection(
     vec3 viewPos,
     vec3 n,
     inout vec4 collectedColor,
+    out float coneMipOut,
     sampler2D source,
     float glossiness)
 {
+    coneMipOut = 0.0;
     float roughness = 1.0 - glossiness;
 
     if (roughness >= maxRoughness)
@@ -271,6 +274,7 @@ float tapScreenSpaceReflection(
     int numSamples = max(1, int(glossySampleCount));
     vec3 accumColor = vec3(0.0);
     float accumFade = 0.0;
+    float accumConeMip = 0.0;
     int hits = 0;
 
     for (int s = 0; s < numSamples; s++)
@@ -398,7 +402,24 @@ float tapScreenSpaceReflection(
 
         float sampleFade = edgeFade * zFade * fadeIn * rayFade * confidence * cameraFacingFade;
 
+        // Contact hardening (Godot cone model):
+        // The roughness defines a reflection cone half-angle. The cone footprint
+        // on screen grows with ray travel distance. Fit an inscribed sphere in
+        // the cone to derive a blur radius, then convert to a mip level.
+        float coneAngle = min(roughness, 0.999) * 3.14159265 * 0.5;
+        float coneLen = rayLen * max(screen_res.x, screen_res.y); // UV → pixels
+        float opLen = 2.0 * tan(coneAngle) * coneLen;
+        float blurRadius = 0.0;
+        if (coneLen > 0.0)
+        {
+            float a2 = opLen * opLen;
+            float fh2 = 4.0 * coneLen * coneLen;
+            blurRadius = (opLen * (sqrt(a2 + fh2) - opLen)) / (4.0 * coneLen);
+        }
+        float coneMip = log2(blurRadius / 16.0 + 1.0);
+
         accumColor += sampledColor.rgb * sampleFade;
+        accumConeMip += coneMip * sampleFade;
         accumFade += sampleFade;
         hits++;
     }
@@ -410,10 +431,17 @@ float tapScreenSpaceReflection(
     }
 
     accumColor /= float(numSamples);
+    accumConeMip /= float(numSamples);
     accumFade /= float(numSamples);
 
     float combinedFade = accumFade * baseEdgeFade;
 
+    // Cone mip: weighted average, normalized to [0,1] for storage in MRT1.
+    float avgConeMip = (accumFade > 0.001) ? accumConeMip / accumFade : 0.0;
+    coneMipOut = clamp(avgConeMip / max(ssrMipScale, 1.0), 0.0, 1.0);
+
+    // RGB: color premultiplied by confidence (for correct mip chain filtering).
+    // A:   confidence (restored — used for premultiply recovery + occlusion blending).
     collectedColor = vec4(accumColor * baseEdgeFade, combinedFade);
     return 1.0;
 }

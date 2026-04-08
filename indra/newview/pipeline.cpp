@@ -924,6 +924,7 @@ bool LLPipeline::allocateScreenBufferInternal(U32 resX, U32 resY)
             // At full res: no own depth, share from deferred (zero-copy).
             // At reduced res: allocate own depth, blit from deferred before alpha/water passes.
             mSSRBuffer.allocate(ssrW, ssrH, GL_RGBA16F, !fullRes, LLTexUnit::TT_TEXTURE, LLTexUnit::TMG_AUTO);
+            mSSRBuffer.addColorAttachment(GL_R16F); // MRT1: cone mip for contact hardening
 
             // Allocate per-mip temp targets for Gaussian ping-pong (one per mip level > 0)
             U32 ssrMipLevels = mSSRBuffer.getMipLevels();
@@ -9962,6 +9963,14 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
                 // Pass mip scale for roughness -> mip level mapping
                 static LLStaticHashedString sSsrMipScale("ssrMipScale");
                 shader.uniform1f(sSsrMipScale, (float)(mSSRBuffer.getMipLevels() - 1));
+
+                // Bind cone mip texture (MRT1) for contact hardening LOD selection
+                S32 coneMipChannel = shader.enableTexture(LLShaderMgr::SSR_CONE_MIP_MAP);
+                if (coneMipChannel > -1)
+                {
+                    gGL.getTexUnit(coneMipChannel)->bindManual(LLTexUnit::TT_TEXTURE, mSSRBuffer.getTexture(1));
+                    gGL.getTexUnit(coneMipChannel)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
+                }
             }
             else
             {
@@ -10004,6 +10013,10 @@ void LLPipeline::bindReflectionProbes(LLGLSLShader& shader)
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_NOISE_SINE, (GLfloat)mPoissonOffset);
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_Z, traceMaxDepth());
             shader.uniform1f(LLShaderMgr::DEFERRED_SSR_MAX_ROUGHNESS, traceMaxRoughness());
+
+            // Pass SSR buffer mip count so the trace can compute cone-based mip levels
+            static LLStaticHashedString sSsrMipScale("ssrMipScale");
+            shader.uniform1f(sSsrMipScale, mSSRBuffer.isComplete() ? (float)(mSSRBuffer.getMipLevels() - 1) : 0.f);
 
             // Compute jitter compensation for SMAA T2x.
             // mSceneMap was rendered with the previous frame's jittered projection.

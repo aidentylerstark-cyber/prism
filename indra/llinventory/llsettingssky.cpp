@@ -866,6 +866,17 @@ LLSettingsSky::validation_list_t LLSettingsSky::validationList()
         validation.push_back(Validator(SETTING_AMBIENT_SKY_SATURATION, false, LLSD::TypeReal,
             boost::bind(&Validator::verifyFloatRange, _1, _2, llsd::array(0.0f, 1.0f))));
 
+        validation.push_back(Validator(SETTING_SKY_VERSION,           false, LLSD::TypeInteger,
+            boost::bind(&Validator::verifyIntegerRange, _1, _2, llsd::array(0, (S32)MAX_SKY_SETTINGS_VERSION))));
+        validation.push_back(Validator(SETTING_SUN_BRIGHTNESS,        false, LLSD::TypeReal));
+        validation.push_back(Validator(SETTING_HDR_OFFSET,            false, LLSD::TypeReal));
+        validation.push_back(Validator(SETTING_HDR_MAX,               false, LLSD::TypeReal));
+        validation.push_back(Validator(SETTING_HDR_MIN,               false, LLSD::TypeReal));
+        validation.push_back(Validator(SETTING_HDR_TONEMAPPER,        false, LLSD::TypeInteger,
+            boost::bind(&Validator::verifyIntegerRange, _1, _2, llsd::array(0, 1))));
+        validation.push_back(Validator(SETTING_HDR_TONEMAPPER_AMOUNT, false, LLSD::TypeReal,
+            boost::bind(&Validator::verifyFloatRange, _1, _2, llsd::array(0.0f, 1.0f))));
+
         validation.push_back(Validator(SETTING_RAYLEIGH_CONFIG, true, LLSD::TypeArray, &validateRayleighLayers));
         validation.push_back(Validator(SETTING_ABSORPTION_CONFIG, true, LLSD::TypeArray, &validateAbsorptionLayers));
         validation.push_back(Validator(SETTING_MIE_CONFIG, true, LLSD::TypeArray, &validateMieLayers));

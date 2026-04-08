@@ -48,7 +48,7 @@ vec4 getPosition(vec2 pos_screen);
 
 float random (vec2 uv);
 
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, out float coneMipOut, sampler2D source, float glossiness);
 
 void main()
 {
@@ -68,8 +68,9 @@ void main()
     }
 
     vec4 collectedColor = vec4(0);
+    float coneMip = 0.0;
 
-    float w = tapScreenSpaceReflection(4, tc, pos, gb.normal, collectedColor, diffuseMap, 0.f);
+    float w = tapScreenSpaceReflection(4, tc, pos, gb.normal, collectedColor, coneMip, diffuseMap, 0.f);
 
     collectedColor.rgb *= specCol.rgb;
 

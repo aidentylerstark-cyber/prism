@@ -25,7 +25,8 @@
 
 /*[EXTRA_CODE_HERE]*/
 
-out vec4 frag_color;
+layout(location = 0) out vec4 frag_color;
+layout(location = 1) out float frag_cone_mip;
 
 in vec3 vary_position;
 in vec3 vary_normal;
@@ -41,7 +42,7 @@ uniform mat4 projection_matrix;
 uniform float roughnessFactor;
 uniform float minimum_alpha;
 
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, out float coneMipOut, sampler2D source, float glossiness);
 void bayerDitherDiscard(float alpha, float threshold);
 
 void main()
@@ -66,7 +67,9 @@ void main()
     vec3 norm = normalize(vary_normal);
 
     vec4 ssrColor = vec4(0.0);
-    tapScreenSpaceReflection(1, tc, vary_position, norm, ssrColor, sceneMap, glossiness);
+    float coneMip = 0.0;
+    tapScreenSpaceReflection(1, tc, vary_position, norm, ssrColor, coneMip, sceneMap, glossiness);
     frag_color = ssrColor;
     frag_color.a *= alpha;
+    frag_cone_mip = coneMip;
 }

@@ -25,7 +25,8 @@
 
 /*[EXTRA_CODE_HERE]*/
 
-out vec4 frag_color;
+layout(location = 0) out vec4 frag_color;
+layout(location = 1) out float frag_cone_mip;
 
 uniform sampler2D bumpMap;
 uniform sampler2D bumpMap2;
@@ -42,7 +43,7 @@ in vec3 vary_position;
 in vec3 vary_normal;
 in vec3 vary_tangent;
 
-float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, sampler2D source, float glossiness);
+float tapScreenSpaceReflection(int totalSamples, vec2 tc, vec3 viewPos, vec3 n, inout vec4 collectedColor, out float coneMipOut, sampler2D source, float glossiness);
 
 uniform sampler2D sceneMap;
 
@@ -92,6 +93,8 @@ void main()
     vec2 tc = (projPos.xy / projPos.w) * 0.5 + 0.5;
 
     vec4 ssrColor = vec4(0.0);
-    tapScreenSpaceReflection(1, tc, vary_position, wave_ibl, ssrColor, sceneMap, glossiness);
+    float coneMip = 0.0;
+    tapScreenSpaceReflection(1, tc, vary_position, wave_ibl, ssrColor, coneMip, sceneMap, glossiness);
     frag_color = ssrColor;
+    frag_cone_mip = coneMip;
 }

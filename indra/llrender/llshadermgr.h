@@ -112,6 +112,7 @@ public:
         ENVIRONMENT_MAP,                    //  "environmentMap"
         SCENE_MAP,                          //  "sceneMap"
         SCENE_DEPTH,                        //  "sceneDepth"
+        SSR_CONE_MIP_MAP,                   //  "ssrConeMipMap"
         REFLECTION_PROBES,                  //  "reflectionProbes"
         IRRADIANCE_PROBES,                  //  "irradianceProbes"
         HERO_PROBE,                         //  "heroProbes"

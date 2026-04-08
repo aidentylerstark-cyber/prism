@@ -1,12 +1,10 @@
 /**
- * @file   lluilistener.h
- * @author Nat Goodspeed
- * @date   2009-08-18
- * @brief  Engage named functions as specified by XUI
+ * @file llvvmquery.h
+ * @brief Query the Viewer Version Manager (VVM) for update information
  *
- * $LicenseInfo:firstyear=2009&license=viewerlgpl$
+ * $LicenseInfo:firstyear=2025&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2025, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,23 +24,19 @@
  * $/LicenseInfo$
  */
 
-#if ! defined(LL_LLUILISTENER_H)
-#define LL_LLUILISTENER_H
+#ifndef LL_LLVVMQUERY_H
+#define LL_LLVVMQUERY_H
 
-#include "lleventapi.h"
-#include <string>
+/**
+ * Initialize the VVM update check.
+ *
+ * This launches a coroutine that queries the Viewer Version Manager (VVM)
+ * to check for available updates. If an update is available, it configures
+ * Velopack with the update URL and initiates the update check/download.
+ *
+ * The release notes URL from the VVM response is posted to the "relnotes"
+ * event pump for display.
+ */
+void initVVMUpdateCheck();
 
-class LLSD;
-
-class LLUIListener: public LLEventAPI
-{
-public:
-    LLUIListener();
-
-private:
-    void call(const LLSD& event) const;
-    void getValue(const LLSD&event) const;
-    void setSelectedByValue(const LLSD& event) const;
-};
-
-#endif /* ! defined(LL_LLUILISTENER_H) */
+#endif // LL_LLVVMQUERY_H

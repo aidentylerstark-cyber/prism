@@ -2459,7 +2459,7 @@ void LLInventoryModel::cache(
         LL_WARNS(LOG_INV) << "Nothing to cache for " << parent_folder_id << LL_ENDL;
         return;
     }
-  
+
     // Fallback pass: catch any categories/items that collectDescendentsIf missed.
     // This can happen when:
     // 1. Categories have VERSION_UNKNOWN (e.g., during async loading)

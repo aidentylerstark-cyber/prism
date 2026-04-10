@@ -28,6 +28,7 @@
 #include "linden_common.h"
 
 #include "llwatchdog.h"
+#include "llmutex.h"
 #include "llthread.h"
 
 constexpr U32 WATCHDOG_SLEEP_TIME_USEC = 1000000U;
@@ -86,7 +87,7 @@ void LLWatchdogEntry::start()
 void LLWatchdogEntry::stop()
 {
     // this can happen very late in the shutdown sequence
-    if (!LLWatchdog::wasDeleted())
+    if (LLWatchdog::instanceExists())
     {
         LLWatchdog::getInstance()->remove(this);
     }

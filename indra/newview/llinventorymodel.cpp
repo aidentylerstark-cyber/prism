@@ -998,6 +998,15 @@ const LLUUID LLInventoryModel::findLibraryCategoryUUIDForType(LLFolderType::ETyp
     return findCategoryUUIDForTypeInRoot(preferred_type, gInventory.getLibraryRootFolderID());
 }
 
+const LLUUID LLInventoryModel::getMarketplaceListingsUUID()
+{
+    if (mMarketplaceListingsUUID.isNull())
+    {
+        mMarketplaceListingsUUID = findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    }
+    return mMarketplaceListingsUUID;
+}
+
 // Convenience function to create a new category. You could call
 // updateCategory() with a newly generated UUID category, but this
 // version will take care of details like what the name should be
@@ -1725,7 +1734,7 @@ void LLInventoryModel::updateCategory(const LLViewerInventoryCategory* cat, U32 
             mask |= LLInventoryObserver::LABEL;
         }
         // Under marketplace, category labels are quite complex and need extra upate
-        const LLUUID marketplace_id = findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID marketplace_id = getMarketplaceListingsUUID();
         if (marketplace_id.notNull() && isObjectDescendentOf(cat->getUUID(), marketplace_id))
         {
             mask |= LLInventoryObserver::LABEL;
@@ -2445,6 +2454,12 @@ void LLInventoryModel::cache(
         INCLUDE_TRASH,
         can_cache);
 
+    if (categories.empty() && items.empty())
+    {
+        LL_WARNS(LOG_INV) << "Nothing to cache for " << parent_folder_id << LL_ENDL;
+        return;
+    }
+  
     // Fallback pass: catch any categories/items that collectDescendentsIf missed.
     // This can happen when:
     // 1. Categories have VERSION_UNKNOWN (e.g., during async loading)
@@ -2518,7 +2533,12 @@ void LLInventoryModel::cache(
     // Use temporary file to avoid potential conflicts with other
     // instances (even a 'read only' instance unzips into a file)
     std::string temp_file = gDirUtilp->getTempFilename();
-    saveToFile(temp_file, categories, items);
+    if (!saveToFile(temp_file, categories, items))
+    {
+        LL_WARNS(LOG_INV) << "Failed to save inventory cache for " << parent_folder_id << LL_ENDL;
+        LLFile::remove(temp_file);
+        return;
+    }
     std::string gzip_filename = getInvCacheAddres(agent_id);
     gzip_filename.append(".gz");
     if(gzip_file(temp_file, gzip_filename))
@@ -3882,6 +3902,7 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
     LLSD inventory;
     if (!is_cache_obsolete)
     {
+        LL_PROFILE_ZONE_NAMED("inventory load from file - llsd parse");
         LLPointer<LLSDParser> parser = new LLSDBinaryParser();
 
         if (parser->parse(file, inventory, LLSDSerialize::SIZE_UNLIMITED) == LLSDParser::PARSE_FAILURE)
@@ -3897,6 +3918,7 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
         const LLSD& llsd_cats = inventory["categories"];
         if (llsd_cats.isArray())
         {
+            LL_PROFILE_ZONE_NAMED("inventory load from file - categories");
             const size_t cat_count = llsd_cats.size();
             categories.reserve(cat_count);  // Pre-allocate to avoid reallocation
 
@@ -3904,17 +3926,21 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
             LLSD::array_const_iterator end = llsd_cats.endArray();
             for (; iter != end; ++iter)
             {
-                LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
-                if (inv_cat->importLLSDMap(*iter))
+                LLSD::array_const_iterator iter = llsd_cats.beginArray();
+                LLSD::array_const_iterator end  = llsd_cats.endArray();
+                for (; iter != end; ++iter)
                 {
-                    categories.push_back(inv_cat);
+                    LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
+                    if (inv_cat->importLLSDMap(*iter))
+                    {
+                        categories.push_back(inv_cat);
+                    }
                 }
             }
         }
 
-        const LLSD& llsd_items = inventory["items"];
-        if (llsd_items.isArray())
         {
+            LL_PROFILE_ZONE_NAMED("inventory load from file - items");
             const size_t item_count = llsd_items.size();
             items.reserve(item_count);  // Pre-allocate to avoid reallocation
 
@@ -3936,22 +3962,29 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
                         const LLAssetType::EType item_type = inv_item->getType();
                         if (item_type == LLAssetType::AT_UNKNOWN)
                         {
-                            cats_to_update.insert(inv_item->getParentUUID());
+                            LL_DEBUGS(LOG_INV) << "Ignoring inventory with null item id: " << inv_item->getName() << LL_ENDL;
                         }
                         else
                         {
-                            items.push_back(inv_item);
+                            if (inv_item->getType() == LLAssetType::AT_UNKNOWN)
+                            {
+                                cats_to_update.insert(inv_item->getParentUUID());
+                            }
+                            else
+                            {
+                                items.push_back(inv_item);
+                            }
                         }
                     }
-                }
 
-                //      TODO(brad) - figure out how to reenable this without breaking everything else
-                //      static constexpr U64 BATCH_SIZE = 512U;
-                //      if ((++lines_count % BATCH_SIZE) == 0)
-                //      {
-                //          // SL-19968 - make sure message system code gets a chance to run every so often
-                //          pump_idle_startup_network();
-                //      }
+                    //      TODO(brad) - figure out how to reenable this without breaking everything else
+                    //      static constexpr U64 BATCH_SIZE = 512U;
+                    //      if ((++lines_count % BATCH_SIZE) == 0)
+                    //      {
+                    //          // SL-19968 - make sure message system code gets a chance to run every so often
+                    //          pump_idle_startup_network();
+                    //      }
+                }
             }
         }
     }
@@ -4021,6 +4054,11 @@ bool LLInventoryModel::saveToFile(const std::string& filename,
         auto it_count = items.size();
         for (auto& item : items)
         {
+            if (item.isNull())
+            {
+                LL_WARNS(LOG_INV) << "Skipping null item during inventory save" << LL_ENDL;
+                continue;
+            }
             LLSD sd;
             item->asLLSD(sd);
             item_array.append(sd);
@@ -4039,6 +4077,12 @@ bool LLInventoryModel::saveToFile(const std::string& filename,
                           << " categories_unknown_version=" << cat_unknown_version_count
                           << " items=" << (S32)it_count
                           << LL_ENDL;
+    }
+    catch(std::bad_alloc&)
+    {
+        // We are quiting, so just log an error and move on.
+        LL_WARNS(LOG_INV) << "Failed to save inventory to cache due to memory allocation failure." << LL_ENDL;
+        return false;
     }
     catch (...)
     {

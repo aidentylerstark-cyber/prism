@@ -663,9 +663,10 @@ void LLViewerMedia::updateMedia(void *dummy_arg)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_MEDIA; //LL_RECORD_BLOCK_TIME(FTM_MEDIA_UPDATE);
 
     llassert(!gCubeSnapshot);
+    static LLCachedControl<bool> use_read_thread(gSavedSettings, "PluginUseReadThread", true);
 
     // Enable/disable the plugin read thread
-    LLPluginProcessParent::setUseReadThread(gSavedSettings.getBOOL("PluginUseReadThread"));
+    LLPluginProcessParent::setUseReadThread(use_read_thread());
 
     // SL-16418 We can't call LLViewerMediaImpl->update() if we are in the state of shutting down.
     if(LLApp::isExiting())
@@ -1757,6 +1758,7 @@ void LLViewerMediaImpl::createMediaSource()
 //////////////////////////////////////////////////////////////////////////////////////////
 void LLViewerMediaImpl::destroyMediaSource()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_MEDIA;
     mNeedsNewTexture = true;
 
     // Tell the viewer media texture it's no longer active
@@ -2189,16 +2191,19 @@ void LLViewerMediaImpl::updateVolume()
 
         if (mProximityCamera > 0)
         {
-            if (mProximityCamera > gSavedSettings.getF32("MediaRollOffMax"))
+            static LLCachedControl<F32> media_rolloff_min(gSavedSettings, "MediaRollOffMin");
+            static LLCachedControl<F32> media_rolloff_max(gSavedSettings, "MediaRollOffMax");
+            static LLCachedControl<F32> media_rolloff_rate(gSavedSettings, "MediaRollOffRate");
+            if (mProximityCamera > media_rolloff_max())
             {
                 volume = 0;
             }
-            else if (mProximityCamera > gSavedSettings.getF32("MediaRollOffMin"))
+            else if (mProximityCamera > media_rolloff_min())
             {
                 // attenuated_volume = 1 / (roll_off_rate * (d - min))^2
                 // the +1 is there so that for distance 0 the volume stays the same
-                F64 adjusted_distance = mProximityCamera - gSavedSettings.getF32("MediaRollOffMin");
-                F64 attenuation = 1.0 + (gSavedSettings.getF32("MediaRollOffRate") * adjusted_distance);
+                F64 adjusted_distance = mProximityCamera - media_rolloff_min();
+                F64 attenuation = 1.0 + (media_rolloff_rate() * adjusted_distance);
                 attenuation = 1.0 / (attenuation * attenuation);
                 // the attenuation multiplier should never be more than one since that would increase volume
                 volume = volume * (F32)llmin(1.0, attenuation);
@@ -2624,19 +2629,30 @@ void LLViewerMediaImpl::navigateTo(const std::string& url, const std::string& mi
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-void LLViewerMediaImpl::navigateInternal()
+void LLViewerMediaImpl::navigateInternal(bool should_log)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_MEDIA;
     // Helpful to have media urls in log file. Shouldn't be spammy.
     {
         // Do not log the query parts
         LLURI u(mMediaURL);
         std::string sanitized_url = (u.query().empty() ? mMediaURL : u.scheme() + "://" + u.authority() + u.path());
-        LL_INFOS() << "media id= " << mTextureId << " url=" << sanitized_url << ", mime_type=" << mMimeType << LL_ENDL;
+        if (should_log)
+        {
+            LL_INFOS("Media") << "media id= " << mTextureId << " url=" << sanitized_url << ", mime_type=" << mMimeType << LL_ENDL;
+        }
+        else
+        {
+            LL_DEBUGS("Media") << "media id= " << mTextureId << " url=" << sanitized_url << ", mime_type=" << mMimeType << LL_ENDL;
+        }
     }
 
     if(mNavigateSuspended)
     {
-        LL_WARNS() << "Deferring navigate." << LL_ENDL;
+        if (should_log || !mNavigateSuspendedDeferred)
+        {
+            LL_WARNS() << "Deferring navigate." << LL_ENDL;
+        }
         mNavigateSuspendedDeferred = true;
         return;
     }
@@ -2644,7 +2660,13 @@ void LLViewerMediaImpl::navigateInternal()
 
     if (!mMimeProbe.expired())
     {
-        LL_WARNS() << "MIME type probe already in progress -- bailing out." << LL_ENDL;
+        if (should_log)
+        {
+            // media periodically suspends and unsuspends (should_log == false),
+            // unsuspend calls this function, it's epxected that sometimes
+            // unsuspend will be attempted while a probe is in flight.
+            LL_WARNS() << "MIME type probe already in progress -- bailing out." << LL_ENDL;
+        }
         return;
     }
 
@@ -2705,9 +2727,13 @@ void LLViewerMediaImpl::navigateInternal()
     {
         loadURI();
     }
-    else
+    else if (should_log)
     {
         LL_WARNS("Media") << "Couldn't navigate to: " << mMediaURL << " as there is no media type for: " << mMimeType << LL_ENDL;
+    }
+    else
+    {
+        LL_DEBUGS("Media") << "Couldn't navigate to: " << mMediaURL << " as there is no media type for: " << mMimeType << LL_ENDL;
     }
 }
 
@@ -3974,7 +4000,7 @@ void LLViewerMediaImpl::setNavigateSuspended(bool suspend)
             if(mNavigateSuspendedDeferred)
             {
                 mNavigateSuspendedDeferred = false;
-                navigateInternal();
+                navigateInternal(false /*suspend happens periodically, don't log*/);
             }
         }
     }

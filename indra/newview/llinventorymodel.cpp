@@ -3939,6 +3939,8 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
             }
         }
 
+        const LLSD& llsd_items = inventory["items"];
+        if (llsd_items.isArray())
         {
             LL_PROFILE_ZONE_NAMED("inventory load from file - items");
             const size_t item_count = llsd_items.size();

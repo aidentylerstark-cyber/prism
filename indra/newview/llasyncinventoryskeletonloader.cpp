@@ -45,6 +45,12 @@ bool gAsyncAgentCacheHydrated = false;
 bool gAsyncLibraryCacheHydrated = false;
 bool gAsyncParentChildMapPrimed = false;
 
+LLAsyncInventorySkeletonLoader::~LLAsyncInventorySkeletonLoader()
+{
+    disconnectCapsCallback();
+    removeIdleCallback();
+}
+
 void LLAsyncInventorySkeletonLoader::reset()
 {
     disconnectCapsCallback();

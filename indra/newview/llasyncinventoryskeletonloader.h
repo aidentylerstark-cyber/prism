@@ -45,6 +45,8 @@ class LLViewerRegion;
 class LLAsyncInventorySkeletonLoader
 {
 public:
+    ~LLAsyncInventorySkeletonLoader();
+
     void start(bool force_async);
     void update();
     bool isRunning() const;

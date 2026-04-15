@@ -264,7 +264,11 @@ void LLView::setName(const std::string& name)
 
     if (parent && !mName.empty())
     {
-        parent->mChildNameCache.erase(mName);
+        auto it = parent->mChildNameCache.find(mName);
+        if (it != parent->mChildNameCache.end() && it->second == this)
+        {
+            parent->mChildNameCache.erase(it);
+        }
     }
 
     mName = name;
@@ -373,10 +377,14 @@ void LLView::removeChild(LLView* child)
         llassert(!child->mInDraw);
         mChildList.remove( child );
 
-        // Remove from name cache
+        // Remove from name cache - verify pointer to handle duplicate names
         if (child->hasName())
         {
-            mChildNameCache.erase(child->getName());
+            auto it = mChildNameCache.find(child->getName());
+            if (it != mChildNameCache.end() && it->second == child)
+            {
+                mChildNameCache.erase(it);
+            }
         }
 
         child->mParentView = NULL;

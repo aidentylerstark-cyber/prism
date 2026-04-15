@@ -1044,25 +1044,23 @@ void LLInventoryPanel::initializeViews(F64 max_time)
 
 void LLInventoryPanel::initRootContent()
 {
-    // Optimization: Only build root folder widget initially, no children.
-    // Children will be built lazily when folders are expanded/opened.
-    // This dramatically reduces startup time with large inventories (100k+ items).
-    // Instead of creating 430k widgets upfront (12 seconds), we create them on-demand.
+    // Optimization: Build root folder and its immediate children (system folders)
+    // but not grandchildren. Children will be built lazily when folders are expanded.
+    // This ensures system folder widgets exist while avoiding the full tree build.
     LLUUID root_id = getRootFolderID();
     if (root_id.notNull())
     {
         LLInventoryObject const* objectp = mInventory->getObject(root_id);
-        buildNewViews(root_id, objectp, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(root_id, objectp, nullptr, BUILD_ONE_FOLDER);
     }
     else
     {
         // Default case: always add "My Inventory" root first, "Library" root second
-        // Build only root widgets - children will load on-demand when expanded
         LLInventoryObject const* my_inv = mInventory->getObject(gInventory.getRootFolderID());
-        buildNewViews(gInventory.getRootFolderID(), my_inv, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(gInventory.getRootFolderID(), my_inv, nullptr, BUILD_ONE_FOLDER);
 
         LLInventoryObject const* library = mInventory->getObject(gInventory.getLibraryRootFolderID());
-        buildNewViews(gInventory.getLibraryRootFolderID(), library, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(gInventory.getLibraryRootFolderID(), library, nullptr, BUILD_ONE_FOLDER);
     }
 }
 

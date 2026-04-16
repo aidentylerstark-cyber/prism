@@ -1,10 +1,10 @@
 /**
- * @file llsdl.h
- * @brief SDL initialization
+ * @file llvvmquery.h
+ * @brief Query the Viewer Version Manager (VVM) for update information
  *
- * $LicenseInfo:firstyear=2007&license=viewerlgpl$
+ * $LicenseInfo:firstyear=2025&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2025, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -24,11 +24,19 @@
  * $/LicenseInfo$
  */
 
-#pragma once
+#ifndef LL_LLVVMQUERY_H
+#define LL_LLVVMQUERY_H
 
-#include "llpreprocessor.h"
+/**
+ * Initialize the VVM update check.
+ *
+ * This launches a coroutine that queries the Viewer Version Manager (VVM)
+ * to check for available updates. If an update is available, it configures
+ * Velopack with the update URL and initiates the update check/download.
+ *
+ * The release notes URL from the VVM response is posted to the "relnotes"
+ * event pump for display.
+ */
+void initVVMUpdateCheck();
 
-extern bool gSDLMainHandled;
-
-void init_sdl(const std::string& app_name);
-void quit_sdl();
+#endif // LL_LLVVMQUERY_H

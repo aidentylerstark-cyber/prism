@@ -3100,6 +3100,13 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
             LL_WARNS("Voice") << "Expected object from data channel:" << data << LL_ENDL;
             return;
         }
+
+        bool is_primary_region = mPrimary;
+        if (!mPrimary && isSpatial() && gAgent.getRegion())
+        {
+            is_primary_region = (mRegionID == gAgent.getRegion()->getRegionID());
+            LL_WARNS() << "mPrimary is false, expected: " << is_primary_region << " connection state: " << getVoiceConnectionState() << LL_ENDL;
+        }
         boost::json::object voice_data = voice_data_parsed.as_object();
         boost::json::object mute;
         boost::json::object user_gain;
@@ -3152,7 +3159,7 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
                     user_gain[participant_id] = (uint32_t)(volume * 200);
                 }
                 LL_WARNS() << "Join msg received for participant " << agent_id << " in channel " << mChannelID
-                           << " , primary: " << primary << LL_ENDL;
+                           << " , msg_primary: " << primary << LL_ENDL;
             }
 
             if (!participant && joined && (primary || !isSpatial()))
@@ -3190,15 +3197,16 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
                         bool is_moderator_muted = participant_obj["m"].as_bool();
 
                         std::string is_muted = is_moderator_muted ? "MUTED" : "NOT muted";
-                        bool is_primary = mPrimary || primary;
                         LL_WARNS() << "Mute info msg received: " << is_muted << " for participant " << agent_id
                                    << " in channel " << mChannelID
                                    << " , spatial: " << isSpatial()
-                                   << " , primary: " << is_primary << LL_ENDL;
+                                   << " , mPrimary: " << mPrimary
+                                   << " , msg_primary: " << primary
+                                   << " , is_primary_region: " << is_primary_region << LL_ENDL;
                         if (isSpatial())
                         {
                             // ignore muted flags from non-primary server
-                            if (mPrimary || primary)
+                            if (is_primary_region || primary)
                             {
                                 participant->mIsModeratorMuted = is_moderator_muted;
                                 if (gAgentID == agent_id)
@@ -3216,7 +3224,7 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
             }
             else
             {
-                if (isSpatial() && (mPrimary || primary))
+                if (isSpatial() && (is_primary_region || primary))
                 {
                     // mute info message can be received before join message, so try to mute again later
                     if (participant_obj.contains("m") && participant_obj["m"].is_bool())
@@ -3237,6 +3245,7 @@ void LLVoiceWebRTCConnection::OnDataReceivedImpl(const std::string &data, bool b
                                 if (participant)
                                 {
                                     participant->mIsModeratorMuted = is_moderator_muted;
+                                    LL_WARNS() << "Participant " << agent_id << " is found after delay, is_muted: " << is_moderator_muted << LL_ENDL;
                                     if (gAgentID == agent_id)
                                     {
                                         LLNearbyVoiceModeration::getInstance()->setMutedInfo(channel_id, is_moderator_muted);

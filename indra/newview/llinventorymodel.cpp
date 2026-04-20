@@ -5031,17 +5031,22 @@ LLPointer<LLInventoryValidationInfo> LLInventoryModel::validate() const
         }
         else if (cats->size() + items->size() != cat->getDescendentCount())
         {
-            // In the case of library this is not unexpected, since
-            // different user accounts may be getting the library
-            // contents from different inventory hosts.
-            if (topmost_ancestor_id.isNull() || topmost_ancestor_id != getLibraryRootFolderID())
+            // During async loading, descendent counts are expected to mismatch
+            // since only a subset of inventory is locally present.
+            if (!mAllowAsyncInventoryUpdates)
             {
-                LL_WARNS(LOG_INV) << "invalid desc count for " << cat_id << " [" << getFullPath(cat) << "]"
+                // In the case of library this is not unexpected, since
+                // different user accounts may be getting the library
+                // contents from different inventory hosts.
+                if (topmost_ancestor_id.isNull() || topmost_ancestor_id != getLibraryRootFolderID())
+                {
+                    LL_WARNS(LOG_INV) << "invalid desc count for " << cat_id << " [" << getFullPath(cat) << "]"
                                       << " cached " << cat->getDescendentCount()
                                       << " expected " << cats->size() << "+" << items->size()
-                                      << "=" << cats->size() +items->size() << LL_ENDL;
-                validation_info->mWarnings["invalid_descendent_count"]++;
-                warning_count++;
+                                      << "=" << cats->size() + items->size() << LL_ENDL;
+                    validation_info->mWarnings["invalid_descendent_count"]++;
+                    warning_count++;
+                }
             }
         }
         if (cat->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN)

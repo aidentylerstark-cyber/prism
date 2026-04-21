@@ -268,7 +268,6 @@ void LLAsyncInventorySkeletonLoader::handleFetchComplete(const LLUUID& request_i
     FetchRequest request = active_it->second;
     mActiveFetches.erase(active_it);
     mQueuedCategories.erase(request_id);
-    mFetchedCategories.insert(request_id);
 
     if (request.mEssential)
     {
@@ -287,6 +286,8 @@ void LLAsyncInventorySkeletonLoader::handleFetchComplete(const LLUUID& request_i
         processQueue();
         return;
     }
+
+    mFetchedCategories.insert(request_id);
 
     LLViewerInventoryCategory* category = gInventory.getCategory(request_id);
     S32 server_version = LLViewerInventoryCategory::VERSION_UNKNOWN;

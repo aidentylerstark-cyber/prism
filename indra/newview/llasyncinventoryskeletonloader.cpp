@@ -233,6 +233,13 @@ void LLAsyncInventorySkeletonLoader::processQueue()
     while (!mFetchQueue.empty() && mActiveFetches.size() < mMaxConcurrentFetches)
     {
         FetchRequest request = mFetchQueue.front();
+
+        // During essential phase, only dispatch essential requests
+        if (!mEssentialReady && !request.mEssential)
+        {
+            break;
+        }
+
         mFetchQueue.pop_front();
 
         AISAPI::completion_t cb = [this, request](const LLUUID& response_id)

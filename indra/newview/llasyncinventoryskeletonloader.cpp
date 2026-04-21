@@ -207,14 +207,14 @@ void LLAsyncInventorySkeletonLoader::scheduleInitialFetches()
     const LLUUID agent_root = gInventory.getRootFolderID();
     if (agent_root.notNull())
     {
-        enqueueFetch(agent_root, false, true, gInventory.getCachedCategoryVersion(agent_root));
+        enqueueFetch(agent_root, false, true, gInventory.getCachedCategoryVersion(agent_root), 0);
         mEssentialPending.insert(agent_root);
     }
 
     const LLUUID library_root = gInventory.getLibraryRootFolderID();
     if (library_root.notNull())
     {
-        enqueueFetch(library_root, true, false, gInventory.getCachedCategoryVersion(library_root));
+        enqueueFetch(library_root, true, false, gInventory.getCachedCategoryVersion(library_root), 0);
     }
 
     mEssentialTimer.reset();
@@ -251,7 +251,7 @@ void LLAsyncInventorySkeletonLoader::processQueue()
                                       requestType(request.mIsLibrary),
                                       false,
                                       cb,
-                                      1);
+                                      request.mRequestDepth);
         mActiveFetches.emplace(request.mCategoryId, request);
     }
 }
@@ -517,7 +517,8 @@ void LLAsyncInventorySkeletonLoader::discoverEssentialFolders()
 void LLAsyncInventorySkeletonLoader::enqueueFetch(const LLUUID& category_id,
                                                   bool is_library,
                                                   bool essential,
-                                                  S32 cached_version)
+                                                  S32 cached_version,
+                                                  S32 depth)
 {
     if (category_id.isNull())
     {
@@ -534,6 +535,7 @@ void LLAsyncInventorySkeletonLoader::enqueueFetch(const LLUUID& category_id,
     request.mIsLibrary = is_library;
     request.mEssential = essential;
     request.mCachedVersion = cached_version;
+    request.mRequestDepth = depth;
 
     if (essential)
     {

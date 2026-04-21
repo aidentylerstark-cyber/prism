@@ -108,6 +108,7 @@ private:
 
     U32 mMaxConcurrentFetches = 4;
     bool mSawCurrentOutfitFolder = false;
+    LLUUID mCurrentOutfitFolderId;
 
     LLFrameTimer mCapsTimer;
     LLFrameTimer mFetchTimer;

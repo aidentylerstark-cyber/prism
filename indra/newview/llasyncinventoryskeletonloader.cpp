@@ -77,6 +77,7 @@ void LLAsyncInventorySkeletonLoader::reset()
     mEssentialTimeoutSec = gSavedSettings.getF32("AsyncInventoryEssentialTimeout");
 
     mSawCurrentOutfitFolder = false;
+    mCurrentOutfitFolderId.setNull();
 }
 
 bool LLAsyncInventorySkeletonLoader::isRunning() const
@@ -213,8 +214,7 @@ void LLAsyncInventorySkeletonLoader::scheduleInitialFetches()
     const LLUUID library_root = gInventory.getLibraryRootFolderID();
     if (library_root.notNull())
     {
-        enqueueFetch(library_root, true, true, gInventory.getCachedCategoryVersion(library_root));
-        mEssentialPending.insert(library_root);
+        enqueueFetch(library_root, true, false, gInventory.getCachedCategoryVersion(library_root));
     }
 
     mEssentialTimer.reset();
@@ -361,6 +361,7 @@ void LLAsyncInventorySkeletonLoader::evaluateChildren(const FetchRequest& reques
         if (child->getPreferredType() == LLFolderType::FT_CURRENT_OUTFIT)
         {
             mSawCurrentOutfitFolder = true;
+            mCurrentOutfitFolderId = child_id;
         }
 
         bool child_essential = false;
@@ -376,7 +377,7 @@ void LLAsyncInventorySkeletonLoader::evaluateChildren(const FetchRequest& reques
         bool should_fetch = child_changed || force_changed_scan;
         if (child_essential)
         {
-            if (!should_fetch && child_cache_valid)
+            if (!child_changed && child_cache_valid)
             {
                 LL_INFOS("AsyncInventory") << "Async skeleton loader trusting cached essential folder"
                                   << " cat_id=" << child_id
@@ -488,6 +489,7 @@ void LLAsyncInventorySkeletonLoader::discoverEssentialFolders()
         && mActiveFetches.count(cof_id) == 0)
     {
         mSawCurrentOutfitFolder = true;
+        mCurrentOutfitFolderId = cof_id;
         LLViewerInventoryCategory* cof = gInventory.getCategory(cof_id);
         const S32 cached_version = gInventory.getCachedCategoryVersion(cof_id);
         if (isCategoryUpToDate(cof, cached_version))
@@ -533,7 +535,14 @@ void LLAsyncInventorySkeletonLoader::enqueueFetch(const LLUUID& category_id,
     request.mEssential = essential;
     request.mCachedVersion = cached_version;
 
-    mFetchQueue.push_back(request);
+    if (essential)
+    {
+        mFetchQueue.push_front(request);
+    }
+    else
+    {
+        mFetchQueue.push_back(request);
+    }
     mQueuedCategories.insert(category_id);
 }
 
@@ -595,7 +604,11 @@ bool LLAsyncInventorySkeletonLoader::hasFetchedCurrentOutfit() const
         return true;
     }
 
-    LLUUID cof_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
+    LLUUID cof_id = mCurrentOutfitFolderId;
+    if (cof_id.isNull())
+    {
+        cof_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
+    }
     if (cof_id.isNull())
     {
         return false;

@@ -3926,15 +3926,10 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
             LLSD::array_const_iterator end = llsd_cats.endArray();
             for (; iter != end; ++iter)
             {
-                LLSD::array_const_iterator iter = llsd_cats.beginArray();
-                LLSD::array_const_iterator end  = llsd_cats.endArray();
-                for (; iter != end; ++iter)
+                LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
+                if (inv_cat->importLLSDMap(*iter))
                 {
-                    LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
-                    if (inv_cat->importLLSDMap(*iter))
-                    {
-                        categories.push_back(inv_cat);
-                    }
+                    categories.push_back(inv_cat);
                 }
             }
         }

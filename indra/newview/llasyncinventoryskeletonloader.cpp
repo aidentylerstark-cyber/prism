@@ -280,7 +280,11 @@ void LLAsyncInventorySkeletonLoader::handleFetchComplete(const LLUUID& request_i
         LL_WARNS("AppInit") << "Async inventory skeleton loader failed to fetch "
                              << request_id << " (library="
                              << (request.mIsLibrary ? "true" : "false") << ")" << LL_ENDL;
-        markFailed("AIS skeleton fetch returned no data for category " + request_id.asString());
+        if (request.mEssential)
+        {
+            markFailed("AIS skeleton fetch returned no data for essential category " + request_id.asString());
+        }
+        processQueue();
         return;
     }
 

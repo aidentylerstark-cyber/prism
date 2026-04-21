@@ -577,7 +577,14 @@ void LLAsyncInventorySkeletonLoader::markFailed(const std::string& reason)
     mPhase = Phase::Failed;
     mFetchTimer.stop();
     mTotalTimer.stop();
-    LL_WARNS("AppInit") << "Async inventory skeleton loader failed: " << mFailureReason << LL_ENDL;
+    if (mEssentialReady)
+    {
+        LL_WARNS("AppInit") << "Async inventory skeleton loader failed after essential-ready: " << mFailureReason << LL_ENDL;
+    }
+    else
+    {
+        LL_WARNS("AppInit") << "Async inventory skeleton loader failed: " << mFailureReason << LL_ENDL;
+    }
 }
 
 bool LLAsyncInventorySkeletonLoader::hasFetchedCurrentOutfit() const

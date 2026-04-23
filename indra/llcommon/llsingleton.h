@@ -524,14 +524,11 @@ public:
             case INITIALIZING:
                 // here if DERIVED_TYPE::initSingleton() (directly or indirectly)
                 // calls DERIVED_TYPE::getInstance(): go ahead and allow it
-                // record the dependency: check if we got here from another
+            case INITIALIZED:
+                // normal subsequent calls
+                // record the dependency, if any: check if we got here from another
                 // LLSingleton's constructor or initSingleton() method
                 capture_dependency(lk->mInstance);
-                return lk->mInstance;
-
-            case INITIALIZED:
-                // normal subsequent calls - skip capture_dependency() for performance
-                // dependencies are only tracked during initialization
                 return lk->mInstance;
 
             case DELETED:
@@ -733,12 +730,10 @@ public:
 
         case super::INITIALIZING:
             // As with LLSingleton, explicitly permit circular calls from
-            // within initSingleton() and capture dependencies
-            super::capture_dependency(lk->mInstance);
-            return lk->mInstance;
-
+            // within initSingleton()
         case super::INITIALIZED:
-            // normal subsequent calls - skip capture_dependency() for performance
+            // for any valid call, capture dependencies
+            super::capture_dependency(lk->mInstance);
             return lk->mInstance;
 
         case super::DELETED:

@@ -1044,25 +1044,63 @@ void LLInventoryPanel::initializeViews(F64 max_time)
 
 void LLInventoryPanel::initRootContent()
 {
-    // Optimization: Only build root folder widget initially, no children.
-    // Children will be built lazily when folders are expanded/opened.
-    // This dramatically reduces startup time with large inventories (100k+ items).
-    // Instead of creating 430k widgets upfront (12 seconds), we create them on-demand.
+    // Optimization: Build root folder and its immediate children (system folders)
+    // but not grandchildren. Essential system folders (Calling Cards, My Outfits,
+    // Marketplace, etc.) also get their immediate children built so that nested
+    // system content (e.g. Friends subfolder, outfit folders) is available at init.
+    // Everything deeper is built lazily when folders are expanded.
     LLUUID root_id = getRootFolderID();
     if (root_id.notNull())
     {
         LLInventoryObject const* objectp = mInventory->getObject(root_id);
-        buildNewViews(root_id, objectp, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(root_id, objectp, nullptr, BUILD_ONE_FOLDER);
+        buildEssentialChildViews(root_id);
     }
     else
     {
         // Default case: always add "My Inventory" root first, "Library" root second
-        // Build only root widgets - children will load on-demand when expanded
         LLInventoryObject const* my_inv = mInventory->getObject(gInventory.getRootFolderID());
-        buildNewViews(gInventory.getRootFolderID(), my_inv, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(gInventory.getRootFolderID(), my_inv, nullptr, BUILD_ONE_FOLDER);
+        buildEssentialChildViews(gInventory.getRootFolderID());
 
         LLInventoryObject const* library = mInventory->getObject(gInventory.getLibraryRootFolderID());
-        buildNewViews(gInventory.getLibraryRootFolderID(), library, nullptr, BUILD_NO_CHILDREN);
+        buildNewViews(gInventory.getLibraryRootFolderID(), library, nullptr, BUILD_ONE_FOLDER);
+    }
+}
+
+void LLInventoryPanel::buildEssentialChildViews(const LLUUID& root_id)
+{
+    // After building root + immediate children, also build one level deeper
+    // for essential system folders so their content is available at startup.
+    LLInventoryModel::cat_array_t* categories = nullptr;
+    LLInventoryModel::item_array_t* items = nullptr;
+    mInventory->getDirectDescendentsOf(root_id, categories, items);
+    if (!categories)
+    {
+        return;
+    }
+
+    for (const auto& cat : *categories)
+    {
+        if (!cat)
+        {
+            continue;
+        }
+        const LLFolderType::EType pref_type = cat->getPreferredType();
+        if (pref_type == LLFolderType::FT_NONE)
+        {
+            continue;
+        }
+        // Build immediate children for essential system folders
+        if (LLFolderType::lookupIsEssentialType(pref_type))
+        {
+            const LLUUID& cat_id = cat->getUUID();
+            LLInventoryObject const* objectp = mInventory->getObject(cat_id);
+            if (objectp)
+            {
+                buildNewViews(cat_id, objectp, getItemByID(cat_id), BUILD_ONE_FOLDER);
+            }
+        }
     }
 }
 

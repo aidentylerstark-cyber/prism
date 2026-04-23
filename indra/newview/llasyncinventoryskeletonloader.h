@@ -45,6 +45,8 @@ class LLViewerRegion;
 class LLAsyncInventorySkeletonLoader
 {
 public:
+    ~LLAsyncInventorySkeletonLoader();
+
     void start(bool force_async);
     void update();
     bool isRunning() const;
@@ -62,6 +64,7 @@ private:
         bool mIsLibrary = false;
         bool mEssential = false;
     S32 mCachedVersion = LLViewerInventoryCategory::VERSION_UNKNOWN;
+    S32 mRequestDepth = 1;
     };
 
     enum class Phase
@@ -86,7 +89,7 @@ private:
     void handleFetchComplete(const LLUUID& request_id, const LLUUID& response_id);
     void evaluateChildren(const FetchRequest& request, bool force_changed_scan);
     void discoverEssentialFolders();
-    void enqueueFetch(const LLUUID& category_id, bool is_library, bool essential, S32 cached_version);
+    void enqueueFetch(const LLUUID& category_id, bool is_library, bool essential, S32 cached_version, S32 depth = 1);
     bool isCategoryUpToDate(const LLViewerInventoryCategory* cat, S32 cached_version) const;
     AISAPI::ITEM_TYPE requestType(bool is_library) const;
     void markEssentialReady();
@@ -106,6 +109,7 @@ private:
 
     U32 mMaxConcurrentFetches = 4;
     bool mSawCurrentOutfitFolder = false;
+    LLUUID mCurrentOutfitFolderId;
 
     LLFrameTimer mCapsTimer;
     LLFrameTimer mFetchTimer;

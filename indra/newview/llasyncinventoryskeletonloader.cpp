@@ -45,6 +45,12 @@ bool gAsyncAgentCacheHydrated = false;
 bool gAsyncLibraryCacheHydrated = false;
 bool gAsyncParentChildMapPrimed = false;
 
+LLAsyncInventorySkeletonLoader::~LLAsyncInventorySkeletonLoader()
+{
+    disconnectCapsCallback();
+    removeIdleCallback();
+}
+
 void LLAsyncInventorySkeletonLoader::reset()
 {
     disconnectCapsCallback();
@@ -71,6 +77,7 @@ void LLAsyncInventorySkeletonLoader::reset()
     mEssentialTimeoutSec = gSavedSettings.getF32("AsyncInventoryEssentialTimeout");
 
     mSawCurrentOutfitFolder = false;
+    mCurrentOutfitFolderId.setNull();
 }
 
 bool LLAsyncInventorySkeletonLoader::isRunning() const
@@ -200,15 +207,14 @@ void LLAsyncInventorySkeletonLoader::scheduleInitialFetches()
     const LLUUID agent_root = gInventory.getRootFolderID();
     if (agent_root.notNull())
     {
-        enqueueFetch(agent_root, false, true, gInventory.getCachedCategoryVersion(agent_root));
+        enqueueFetch(agent_root, false, true, gInventory.getCachedCategoryVersion(agent_root), 0);
         mEssentialPending.insert(agent_root);
     }
 
     const LLUUID library_root = gInventory.getLibraryRootFolderID();
     if (library_root.notNull())
     {
-        enqueueFetch(library_root, true, true, gInventory.getCachedCategoryVersion(library_root));
-        mEssentialPending.insert(library_root);
+        enqueueFetch(library_root, true, false, gInventory.getCachedCategoryVersion(library_root), 0);
     }
 
     mEssentialTimer.reset();
@@ -227,6 +233,13 @@ void LLAsyncInventorySkeletonLoader::processQueue()
     while (!mFetchQueue.empty() && mActiveFetches.size() < mMaxConcurrentFetches)
     {
         FetchRequest request = mFetchQueue.front();
+
+        // During essential phase, only dispatch essential requests
+        if (!mEssentialReady && !request.mEssential)
+        {
+            break;
+        }
+
         mFetchQueue.pop_front();
 
         AISAPI::completion_t cb = [this, request](const LLUUID& response_id)
@@ -245,7 +258,7 @@ void LLAsyncInventorySkeletonLoader::processQueue()
                                       requestType(request.mIsLibrary),
                                       false,
                                       cb,
-                                      1);
+                                      request.mRequestDepth);
         mActiveFetches.emplace(request.mCategoryId, request);
     }
 }
@@ -262,7 +275,6 @@ void LLAsyncInventorySkeletonLoader::handleFetchComplete(const LLUUID& request_i
     FetchRequest request = active_it->second;
     mActiveFetches.erase(active_it);
     mQueuedCategories.erase(request_id);
-    mFetchedCategories.insert(request_id);
 
     if (request.mEssential)
     {
@@ -274,9 +286,15 @@ void LLAsyncInventorySkeletonLoader::handleFetchComplete(const LLUUID& request_i
         LL_WARNS("AppInit") << "Async inventory skeleton loader failed to fetch "
                              << request_id << " (library="
                              << (request.mIsLibrary ? "true" : "false") << ")" << LL_ENDL;
-        markFailed("AIS skeleton fetch returned no data for category " + request_id.asString());
+        if (request.mEssential)
+        {
+            markFailed("AIS skeleton fetch returned no data for essential category " + request_id.asString());
+        }
+        processQueue();
         return;
     }
+
+    mFetchedCategories.insert(request_id);
 
     LLViewerInventoryCategory* category = gInventory.getCategory(request_id);
     S32 server_version = LLViewerInventoryCategory::VERSION_UNKNOWN;
@@ -350,6 +368,7 @@ void LLAsyncInventorySkeletonLoader::evaluateChildren(const FetchRequest& reques
         if (child->getPreferredType() == LLFolderType::FT_CURRENT_OUTFIT)
         {
             mSawCurrentOutfitFolder = true;
+            mCurrentOutfitFolderId = child_id;
         }
 
         bool child_essential = false;
@@ -365,7 +384,7 @@ void LLAsyncInventorySkeletonLoader::evaluateChildren(const FetchRequest& reques
         bool should_fetch = child_changed || force_changed_scan;
         if (child_essential)
         {
-            if (!should_fetch && child_cache_valid)
+            if (!child_changed && child_cache_valid)
             {
                 LL_INFOS("AsyncInventory") << "Async skeleton loader trusting cached essential folder"
                                   << " cat_id=" << child_id
@@ -477,6 +496,7 @@ void LLAsyncInventorySkeletonLoader::discoverEssentialFolders()
         && mActiveFetches.count(cof_id) == 0)
     {
         mSawCurrentOutfitFolder = true;
+        mCurrentOutfitFolderId = cof_id;
         LLViewerInventoryCategory* cof = gInventory.getCategory(cof_id);
         const S32 cached_version = gInventory.getCachedCategoryVersion(cof_id);
         if (isCategoryUpToDate(cof, cached_version))
@@ -504,7 +524,8 @@ void LLAsyncInventorySkeletonLoader::discoverEssentialFolders()
 void LLAsyncInventorySkeletonLoader::enqueueFetch(const LLUUID& category_id,
                                                   bool is_library,
                                                   bool essential,
-                                                  S32 cached_version)
+                                                  S32 cached_version,
+                                                  S32 depth)
 {
     if (category_id.isNull())
     {
@@ -521,8 +542,16 @@ void LLAsyncInventorySkeletonLoader::enqueueFetch(const LLUUID& category_id,
     request.mIsLibrary = is_library;
     request.mEssential = essential;
     request.mCachedVersion = cached_version;
+    request.mRequestDepth = depth;
 
-    mFetchQueue.push_back(request);
+    if (essential)
+    {
+        mFetchQueue.push_front(request);
+    }
+    else
+    {
+        mFetchQueue.push_back(request);
+    }
     mQueuedCategories.insert(category_id);
 }
 
@@ -567,7 +596,14 @@ void LLAsyncInventorySkeletonLoader::markFailed(const std::string& reason)
     mPhase = Phase::Failed;
     mFetchTimer.stop();
     mTotalTimer.stop();
-    LL_WARNS("AppInit") << "Async inventory skeleton loader failed: " << mFailureReason << LL_ENDL;
+    if (mEssentialReady)
+    {
+        LL_WARNS("AppInit") << "Async inventory skeleton loader failed after essential-ready: " << mFailureReason << LL_ENDL;
+    }
+    else
+    {
+        LL_WARNS("AppInit") << "Async inventory skeleton loader failed: " << mFailureReason << LL_ENDL;
+    }
 }
 
 bool LLAsyncInventorySkeletonLoader::hasFetchedCurrentOutfit() const
@@ -577,7 +613,11 @@ bool LLAsyncInventorySkeletonLoader::hasFetchedCurrentOutfit() const
         return true;
     }
 
-    LLUUID cof_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
+    LLUUID cof_id = mCurrentOutfitFolderId;
+    if (cof_id.isNull())
+    {
+        cof_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
+    }
     if (cof_id.isNull())
     {
         return false;

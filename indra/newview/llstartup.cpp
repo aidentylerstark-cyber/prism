@@ -1992,6 +1992,13 @@ bool idle_startup()
                                  << (gInventory.isInventoryUsable() ? "true" : "false") << LL_ENDL;
         }
 
+        // Reset stale loader state from a previous session (e.g. relog without restart)
+        if (!gAsyncInventorySkeletonLoader.isRunning()
+            && (gAsyncInventorySkeletonLoader.isComplete() || gAsyncInventorySkeletonLoader.isEssentialReady()))
+        {
+            gAsyncInventorySkeletonLoader.reset();
+        }
+
         if (!gAsyncInventorySkeletonLoader.isRunning()
             && !gAsyncInventorySkeletonLoader.isComplete()
             && !gAsyncInventorySkeletonLoader.hasFailed())

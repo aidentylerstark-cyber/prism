@@ -2459,7 +2459,7 @@ void LLInventoryModel::cache(
         LL_WARNS(LOG_INV) << "Nothing to cache for " << parent_folder_id << LL_ENDL;
         return;
     }
-  
+
     // Fallback pass: catch any categories/items that collectDescendentsIf missed.
     // This can happen when:
     // 1. Categories have VERSION_UNKNOWN (e.g., during async loading)
@@ -3926,15 +3926,10 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
             LLSD::array_const_iterator end = llsd_cats.endArray();
             for (; iter != end; ++iter)
             {
-                LLSD::array_const_iterator iter = llsd_cats.beginArray();
-                LLSD::array_const_iterator end  = llsd_cats.endArray();
-                for (; iter != end; ++iter)
+                LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
+                if (inv_cat->importLLSDMap(*iter))
                 {
-                    LLPointer<LLViewerInventoryCategory> inv_cat = new LLViewerInventoryCategory(LLUUID::null);
-                    if (inv_cat->importLLSDMap(*iter))
-                    {
-                        categories.push_back(inv_cat);
-                    }
+                    categories.push_back(inv_cat);
                 }
             }
         }
@@ -5031,17 +5026,22 @@ LLPointer<LLInventoryValidationInfo> LLInventoryModel::validate() const
         }
         else if (cats->size() + items->size() != cat->getDescendentCount())
         {
-            // In the case of library this is not unexpected, since
-            // different user accounts may be getting the library
-            // contents from different inventory hosts.
-            if (topmost_ancestor_id.isNull() || topmost_ancestor_id != getLibraryRootFolderID())
+            // During async loading, descendent counts are expected to mismatch
+            // since only a subset of inventory is locally present.
+            if (!mAllowAsyncInventoryUpdates)
             {
-                LL_WARNS(LOG_INV) << "invalid desc count for " << cat_id << " [" << getFullPath(cat) << "]"
+                // In the case of library this is not unexpected, since
+                // different user accounts may be getting the library
+                // contents from different inventory hosts.
+                if (topmost_ancestor_id.isNull() || topmost_ancestor_id != getLibraryRootFolderID())
+                {
+                    LL_WARNS(LOG_INV) << "invalid desc count for " << cat_id << " [" << getFullPath(cat) << "]"
                                       << " cached " << cat->getDescendentCount()
                                       << " expected " << cats->size() << "+" << items->size()
-                                      << "=" << cats->size() +items->size() << LL_ENDL;
-                validation_info->mWarnings["invalid_descendent_count"]++;
-                warning_count++;
+                                      << "=" << cats->size() + items->size() << LL_ENDL;
+                    validation_info->mWarnings["invalid_descendent_count"]++;
+                    warning_count++;
+                }
             }
         }
         if (cat->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN)

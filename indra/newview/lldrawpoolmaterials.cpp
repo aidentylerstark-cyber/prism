@@ -143,46 +143,6 @@ void LLDrawPoolMaterials::renderDeferred(S32 pass)
     LLCullResult::drawinfo_iterator begin = gPipeline.beginRenderMap(type);
     LLCullResult::drawinfo_iterator end = gPipeline.endRenderMap(type);
 
-    F32 lastIntensity = 0.f;
-    F32 lastFullbright = 0.f;
-    F32 lastMinimumAlpha = 0.f;
-    LLVector4 lastSpecular = LLVector4(0, 0, 0, 0);
-
-    GLint intensity = mShader->getUniformLocation(LLShaderMgr::ENVIRONMENT_INTENSITY);
-    GLint brightness = mShader->getUniformLocation(LLShaderMgr::EMISSIVE_BRIGHTNESS);
-    GLint minAlpha = mShader->getUniformLocation(LLShaderMgr::MINIMUM_ALPHA);
-    GLint specular = mShader->getUniformLocation(LLShaderMgr::SPECULAR_COLOR);
-
-    GLint diffuseChannel = mShader->enableTexture(LLShaderMgr::DIFFUSE_MAP);
-    GLint specChannel = mShader->enableTexture(LLShaderMgr::SPECULAR_MAP);
-    GLint normChannel = mShader->enableTexture(LLShaderMgr::BUMP_MAP);
-
-    LLTexture* lastNormalMap = nullptr;
-    LLTexture* lastSpecMap = nullptr;
-    LLTexture* lastDiffuse = nullptr;
-
-    gGL.getTexUnit(diffuseChannel)->unbindFast(LLTexUnit::TT_TEXTURE);
-
-    if (intensity > -1)
-    {
-        glUniform1f(intensity, lastIntensity);
-    }
-
-    if (brightness > -1)
-    {
-        glUniform1f(brightness, lastFullbright);
-    }
-
-    if (minAlpha > -1)
-    {
-        glUniform1f(minAlpha, lastMinimumAlpha);
-    }
-
-    if (specular > -1)
-    {
-        glUniform4fv(specular, 1, lastSpecular.mV);
-    }
-
     const LLVOAvatar* lastAvatar = nullptr;
     U64 lastMeshId = 0;
     bool skipLastSkin = false;
@@ -194,57 +154,11 @@ void LLDrawPoolMaterials::renderDeferred(S32 pass)
 
         LLCullResult::increment_iterator(i, end);
 
-        if (specular > -1 && params.mSpecColor != lastSpecular)
-        {
-            lastSpecular = params.mSpecColor;
-            glUniform4fv(specular, 1, lastSpecular.mV);
-        }
-
-        if (intensity != -1 && lastIntensity != params.mEnvIntensity)
-        {
-            lastIntensity = params.mEnvIntensity;
-            glUniform1f(intensity, lastIntensity);
-        }
-
-        if (minAlpha > -1 && lastMinimumAlpha != params.mAlphaMaskCutoff)
-        {
-            lastMinimumAlpha = params.mAlphaMaskCutoff;
-            glUniform1f(minAlpha, lastMinimumAlpha);
-        }
-
-        F32 fullbright = params.mFullbright ? 1.f : 0.f;
-        if (brightness > -1 && lastFullbright != fullbright)
-        {
-            lastFullbright = fullbright;
-            glUniform1f(brightness, lastFullbright);
-        }
-
-        if (normChannel > -1 && params.mNormalMap != lastNormalMap)
-        {
-            lastNormalMap = params.mNormalMap;
-            llassert(lastNormalMap);
-            gGL.getTexUnit(normChannel)->bindFast(lastNormalMap);
-        }
-
-        if (specChannel > -1 && params.mSpecularMap != lastSpecMap)
-        {
-            lastSpecMap = params.mSpecularMap;
-            llassert(lastSpecMap);
-            gGL.getTexUnit(specChannel)->bindFast(lastSpecMap);
-        }
-
-        if (params.mTexture != lastDiffuse)
-        {
-            lastDiffuse = params.mTexture;
-            if (lastDiffuse)
-            {
-                gGL.getTexUnit(diffuseChannel)->bindFast(lastDiffuse);
-            }
-            else
-            {
-                gGL.getTexUnit(diffuseChannel)->unbindFast(LLTexUnit::TT_TEXTURE);
-            }
-        }
+        // Bind per-slot samplers (tex*/norm*/spec*) and upload per-slot
+        // material uniform arrays. Unit resolution goes through the shader's
+        // reserved-uniform table rather than guessing contiguous ranges —
+        // see LLRenderPass::bindIndexedTextureArrays.
+        LLRenderPass::bindIndexedTextureArrays(params);
 
         // upload matrix palette to shader
         if (rigged)

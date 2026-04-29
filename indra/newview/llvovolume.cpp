@@ -5226,13 +5226,10 @@ LLControlAVBridge::LLControlAVBridge(LLDrawable* drawablep, LLViewerRegion* regi
 
 bool can_batch_texture(LLFace* facep)
 {
-    if (facep->getTextureEntry()->getBumpmap())
-    { //bump maps aren't worked into texture batching yet
-        return false;
-    }
+    const LLTextureEntry* te = facep->getTextureEntry();
 
-    if (facep->getTextureEntry()->getMaterialParams().notNull())
-    { //materials don't work with texture batching yet
+    if (te->getBumpmap())
+    { //legacy bump maps aren't worked into texture batching yet
         return false;
     }
 
@@ -5246,9 +5243,22 @@ bool can_batch_texture(LLFace* facep)
         return false;
     }
 
-    if (facep->getTextureEntry()->getGLTFRenderMaterial() != nullptr)
-    { // PBR materials break indexed texture batching
-        return false;
+    // Blinn-Phong materials that render in the alpha pool cannot participate
+    // in indexed-texture batching. The forward-lit BLEND variants of
+    // gDeferredMaterialProgram sample `lightFunc` (and other reserved
+    // samplers) from units whose mapping breaks once per-slot indexed
+    // samplers get pinned alongside them — leaving the fragment reading
+    // garbage. Keep those faces single-slot so they ride the scalar-uniform
+    // path in the material shader. Opaque / alpha-mask BP and all PBR keep
+    // their indexed batching.
+    if (LLMaterial* mat = te->getMaterialParams().get())
+    {
+        const bool color_alpha = te->getColor().mV[3] < 0.999f;
+        const bool mat_blend   = mat->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND;
+        if (color_alpha || mat_blend)
+        {
+            return false;
+        }
     }
 
     return true;
@@ -5456,21 +5466,267 @@ void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep,
         }
     }
 
+    // Fill the parallel per-slot arrays on a drawinfo for `facep` at slot `slot`.
+    // Safe to call for legacy (non-material) faces — the arrays grow but the
+    // binding code only reads them when mTextureList.size() > 1.
+    auto populate_slot = [&](LLDrawInfo* info, U8 slot)
+    {
+        if (slot >= FACE_DO_NOT_BATCH_TEXTURES)
+        {
+            return;
+        }
+        const U32 needed = (U32)slot + 1u;
+
+        if (mat)
+        {
+            // Blinn-Phong per-slot data. Substitute the proper defaults when
+            // the face's diffuse/normal/spec map is missing or still loading —
+            // otherwise `diffuseLookup` / `normalLookup` / `specularLookup`
+            // would sample whatever stale texture a prior batch happened to
+            // leave on that unit (visible as "diffuse and specular swapped"
+            // when a shadow-plane face has no diffuse set).
+            //
+            // IMPORTANT: fetch the spec/normal textures by the MATERIAL's ID
+            // rather than going through LLViewerObject::mTESpecularMaps /
+            // mTENormalMaps. Those per-object arrays can get out of sync with
+            // the material's current spec/normal IDs (e.g., if the material
+            // was swapped without a full updateTEMaterialTextures pass), in
+            // which case the stored LLViewerTexture may actually be the face's
+            // DIFFUSE texture cached there previously — exactly matching the
+            // "diffuse ends up in the specular slot" symptom.
+            // Resolve normal/spec maps by UUID via the texture manager. The
+            // object's getTENormalMap/getTESpecularMap accessors return
+            // sDefaultImagep whenever mTENormalMaps[te] hasn't been
+            // populated yet — which is what happens during the window
+            // between mat->setNormalID(uuid) and changeTENormalMap actually
+            // registering the image on the object. If we see the default
+            // sentinel there, my fallback substitutes sFlatNormalImagep /
+            // sWhiteImagep into mNormalList[slot], and the drawinfo is then
+            // stuck on that default until the next LOD rebuild re-runs
+            // populate_slot. User-visible symptom: normal maps don't show
+            // up until you zoom out far enough to force an LOD rebuild.
+            //
+            // getFetchedTexture returns the canonical LLViewerFetchedTexture
+            // singleton for the UUID regardless of object state — same
+            // pointer the object will eventually hold — so as the texture's
+            // GL data fills in, bindFast naturally picks it up. Stats &
+            // priority are still driven by facep->setNormalMap / addFace
+            // registrations done elsewhere in the object lifecycle.
+            // Pull normal/spec maps from the object's per-TE slots — same
+            // accessors the rest of the volume pipeline uses (see
+            // regenFaces at llvovolume.cpp:1797). These return the
+            // LLViewerTexture the object already holds; their GL data
+            // fills in naturally as the fetcher delivers it.
+            LLViewerTexture* d_tex = tex;
+            LLViewerTexture* n_tex = nullptr;
+            LLViewerTexture* s_tex = nullptr;
+            const LLUUID& norm_id = mat->getNormalID();
+            const LLUUID& spec_id = mat->getSpecularID();
+            LLViewerObject* vobj = facep->getViewerObject();
+            const U8 te_offset = facep->getTEOffset();
+            LLViewerTexture* default_img = LLViewerFetchedTexture::sDefaultImagep.get();
+
+            if (norm_id.notNull())
+            {
+                n_tex = vobj ? vobj->getTENormalMap(te_offset) : nullptr;
+                if (!n_tex || n_tex == default_img)
+                {
+                    // TE slot not populated yet (the async gap between
+                    // mat->setNormalID and changeTENormalMap landing the
+                    // image on the object). Grab the canonical fetched
+                    // texture by UUID — same singleton the object will
+                    // eventually hold — so mNormalList[slot] points at the
+                    // real LLViewerTexture whose GL data fills in live as
+                    // the fetcher delivers. Otherwise we'd stamp
+                    // sFlatNormalImagep here and the face would be stuck
+                    // on the flat default until some later LOD rebuild
+                    // re-ran populate_slot after the TE slot populated.
+                    n_tex = LLViewerTextureManager::getFetchedTexture(
+                        norm_id, FTT_DEFAULT, true, LLGLTexture::BOOST_NONE, LLViewerTexture::LOD_TEXTURE);
+                }
+            }
+            if (spec_id.notNull())
+            {
+                s_tex = vobj ? vobj->getTESpecularMap(te_offset) : nullptr;
+                if (!s_tex || s_tex == default_img)
+                {
+                    // Same async-gap fallback as the normal case above.
+                    s_tex = LLViewerTextureManager::getFetchedTexture(
+                        spec_id, FTT_DEFAULT, true, LLGLTexture::BOOST_NONE, LLViewerTexture::LOD_TEXTURE);
+                }
+            }
+
+            if (!d_tex || d_tex == default_img)
+                d_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+            // sFlatNormalImagep / sWhiteImagep substitutions only fire for
+            // "material has no normal/spec map at all" now — norm_id/spec_id
+            // null cases. The async-gap cases above resolve to real
+            // textures so live VRAM updates flow through to the drawinfo.
+            if (!n_tex)
+                n_tex = LLViewerFetchedTexture::sFlatNormalImagep.get();
+            if (!s_tex)
+                s_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+
+            if (info->mTextureList.size()  < needed) info->mTextureList.resize(needed);
+            if (info->mNormalList.size()   < needed) info->mNormalList.resize(needed);
+            if (info->mSpecularList.size() < needed) info->mSpecularList.resize(needed);
+            info->mTextureList[slot]  = d_tex;
+            info->mNormalList[slot]   = n_tex;
+            info->mSpecularList[slot] = s_tex;
+
+            // Only populate specular data when the material actually has a
+            // specular map. No spec map → zero the spec payload so this slot
+            // contributes no specular at all (matches the modern "no spec map
+            // = no spec" contract, not the legacy shiny-LUT fallback).
+            //
+            // With spec_color = {0,0,0,0}:
+            //   - getSpecular() returns rgb=0 regardless of HAS_SPECULAR_MAP
+            //     (either `spec_map.rgb * 0` or `vec4(0,0,0,1)`).
+            //   - glossiness = MAT_SPEC_COLOR.a = 0 → no highlight peak.
+            //   - env = MAT_ENV_INTENSITY * spec.a → stays 0 when we also
+            //     zero env_intensity below.
+            LLVector4 spec_color;
+            F32 env_intensity = 0.f;
+            if (spec_id.notNull())
+            {
+                spec_color.set(
+                    mat->getSpecularLightColor().mV[0] * (1.f / 255.f),
+                    mat->getSpecularLightColor().mV[1] * (1.f / 255.f),
+                    mat->getSpecularLightColor().mV[2] * (1.f / 255.f),
+                    mat->getSpecularLightExponent() * (1.f / 255.f));
+                env_intensity = mat->getEnvironmentIntensity() * (1.f / 255.f);
+            }
+            else
+            {
+                spec_color.set(0.f, 0.f, 0.f, 0.f);
+            }
+
+            // material_params layout consumed by materialF.glsl:
+            //   .x env_intensity
+            //   .y minimum_alpha  (alphaMask-mode cutoff)
+            //   .z emissive_brightness (1 = fullbright)
+            //   .w face color alpha — carries the true per-face transparency
+            //        independent of vertex_color.a, which for Blinn-Phong
+            //        faces without a specular map still carries the shiny
+            //        encoding (SHININESS_TO_ALPHA) via LLFace::getGeometryVolume
+            //        when the face isn't in an alpha pool. The BLEND
+            //        fragment path uses .w for output alpha so transparency
+            //        works regardless of what shiny-in-alpha wrote.
+            LLVector4 mat_params(
+                env_intensity,
+                mat->getAlphaMaskCutoff() * (1.f / 255.f),
+                fullbright ? 1.f : 0.f,
+                te->getColor().mV[3]);
+            if (info->mSpecularColors.size() < needed) info->mSpecularColors.resize(needed);
+            if (info->mMaterialParams.size() < needed) info->mMaterialParams.resize(needed);
+            info->mSpecularColors[slot] = spec_color;
+            info->mMaterialParams[slot] = mat_params;
+        }
+        else if (gltf_mat)
+        {
+            // PBR per-slot data.
+            //
+            // Discipline here is deliberately *different* from the Blinn-Phong
+            // branch above: per the GLTF 2.0 spec, metallicFactor,
+            // roughnessFactor, emissiveFactor (and baseColorFactor, which is
+            // baked into vertex color at geometry build time) always apply —
+            // they multiply against the relevant texture sample, or against
+            // an implicit 1.0/white when no texture is bound. So we do NOT
+            // gate any factor on "is the texture present" the way we gate
+            // Blinn-Phong spec color on `spec_id.notNull()`. Every slot gets
+            // the full factor payload, full set of KHR texture_transforms,
+            // and the canonical GLTF default textures (sWhiteImagep /
+            // sFlatNormalImagep) filling in for anything the material didn't
+            // supply — matching LLFetchedGLTFMaterial::bind() exactly.
+
+            // --- Textures: always populate a slot, substituting canonical
+            //     GLTF defaults for anything missing or still loading. A null
+            //     entry here would leave whatever a prior draw bound on that
+            //     unit, which shows up as normal/spec/emissive flickering
+            //     across batches under camera motion.
+            if (info->mTextureList.size()  < needed) info->mTextureList.resize(needed);
+            if (info->mNormalList.size()   < needed) info->mNormalList.resize(needed);
+            if (info->mSpecularList.size() < needed) info->mSpecularList.resize(needed);
+            if (info->mEmissiveList.size() < needed) info->mEmissiveList.resize(needed);
+
+            LLViewerTexture* base_tex = (tex != nullptr) ? tex : gltf_mat->mBaseColorTexture.get();
+            if (!base_tex) base_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+
+            LLViewerTexture* normal_tex = gltf_mat->mNormalTexture.get();
+            if (!normal_tex || (normal_tex->getDiscardLevel() > 4))
+                normal_tex = LLViewerFetchedTexture::sFlatNormalImagep.get();
+
+            LLViewerTexture* mr_tex = gltf_mat->mMetallicRoughnessTexture.get();
+            if (!mr_tex) mr_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+
+            LLViewerTexture* emissive_tex = gltf_mat->mEmissiveTexture.get();
+            if (!emissive_tex) emissive_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+
+            info->mTextureList[slot]  = base_tex;
+            info->mNormalList[slot]   = normal_tex;
+            info->mSpecularList[slot] = mr_tex;
+            info->mEmissiveList[slot] = emissive_tex;
+
+            // --- Factors: always applied. No texture-presence gating.
+            //
+            //   pbr_factors.x = metallic factor   (multiplies spec.b from MR)
+            //   pbr_factors.y = roughness factor  (multiplies spec.g from MR)
+            //   pbr_factors.z = min_alpha         (alphaMode MASK cutoff, else -1)
+            //   emissive_colors.rgb = emissive factor (multiplies emissiveMap)
+            //
+            // min_alpha is the only value gated on anything here, and the gate
+            // is the alphaMode (a GLTF spec rule), not texture availability.
+            const F32 min_alpha = (gltf_mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_MASK) ? gltf_mat->mAlphaCutoff : -1.f;
+            LLVector4 pbr_factors(gltf_mat->mMetallicFactor, gltf_mat->mRoughnessFactor, min_alpha, 0.f);
+            LLVector4 emissive(gltf_mat->mEmissiveColor.mV[0], gltf_mat->mEmissiveColor.mV[1], gltf_mat->mEmissiveColor.mV[2], 0.f);
+            if (info->mPbrFactors.size()    < needed) info->mPbrFactors.resize(needed);
+            if (info->mEmissiveColors.size() < needed) info->mEmissiveColors.resize(needed);
+            info->mPbrFactors[slot]    = pbr_factors;
+            info->mEmissiveColors[slot] = emissive;
+
+            F32 packed[8];
+            const U32 xf_base = (U32)slot * 2u;
+            auto ensure = [&](std::vector<LLVector4>& v) { if (v.size() < xf_base + 2) v.resize(xf_base + 2); };
+            ensure(info->mBaseColorXform);
+            ensure(info->mNormalXform);
+            ensure(info->mMetallicRoughnessXform);
+            ensure(info->mEmissiveXform);
+
+            gltf_mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR].getPacked(packed);
+            info->mBaseColorXform[xf_base]   = LLVector4(packed);
+            info->mBaseColorXform[xf_base+1] = LLVector4(packed+4);
+
+            gltf_mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_NORMAL].getPacked(packed);
+            info->mNormalXform[xf_base]   = LLVector4(packed);
+            info->mNormalXform[xf_base+1] = LLVector4(packed+4);
+
+            gltf_mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS].getPacked(packed);
+            info->mMetallicRoughnessXform[xf_base]   = LLVector4(packed);
+            info->mMetallicRoughnessXform[xf_base+1] = LLVector4(packed+4);
+
+            gltf_mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_EMISSIVE].getPacked(packed);
+            info->mEmissiveXform[xf_base]   = LLVector4(packed);
+            info->mEmissiveXform[xf_base+1] = LLVector4(packed+4);
+        }
+    };
+
     if (index < FACE_DO_NOT_BATCH_TEXTURES && idx >= 0)
     {
-        if (mat || gltf_mat || draw_vec[idx]->mMaterial)
-        { //can't batch textures when materials are present (yet)
-            batchable = false;
-        }
-        else if (index < draw_vec[idx]->mTextureList.size())
+        // Decide batchability *without* mutating draw_vec[idx] — the merge
+        // check at line ~5610 may still fail and send this face down the
+        // "create a new drawinfo" branch. Previously an early write here
+        // would leak the face's diffuse into the prior drawinfo's
+        // mTextureList[index] while leaving the parallel mNormalList /
+        // mSpecularList / mEmissiveList / per-slot uniform arrays unfilled,
+        // and that corrupted state then misled subsequent batchable checks
+        // and the indexed-sampler bind for the prior drawinfo if any of its
+        // vertices happened to reference that slot. The actual write lives
+        // in the merge-success branch below, alongside populate_slot().
+        if (index < draw_vec[idx]->mTextureList.size())
         {
-            if (draw_vec[idx]->mTextureList[index].isNull())
+            const LLPointer<LLViewerTexture>& existing = draw_vec[idx]->mTextureList[index];
+            if (existing.isNull() || existing == tex)
             {
-                batchable = true;
-                draw_vec[idx]->mTextureList[index] = tex;
-            }
-            else if (draw_vec[idx]->mTextureList[index] == tex)
-            { //this face's texture index can be used with this batch
                 batchable = true;
             }
         }
@@ -5503,10 +5759,17 @@ void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep,
         info->mCount += facep->getIndicesCount();
         info->mEnd += facep->getGeomCount();
 
-        if (index < FACE_DO_NOT_BATCH_TEXTURES && index >= info->mTextureList.size())
+        if (index < FACE_DO_NOT_BATCH_TEXTURES && can_batch_texture(facep))
         {
-            info->mTextureList.resize(index+1);
+            if (index >= info->mTextureList.size())
+            {
+                info->mTextureList.resize(index+1);
+            }
+            // Write the diffuse into the merged drawinfo here — not in the
+            // pre-merge batchable check — so a drawinfo is only mutated
+            // once we're committed to putting this face in it.
             info->mTextureList[index] = tex;
+            populate_slot(info, index);
         }
         info->validate();
     }
@@ -5590,10 +5853,19 @@ void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep,
             facep->setDrawInfo(draw_info);
         }
 
-        if (index < FACE_DO_NOT_BATCH_TEXTURES)
+        // Only populate the per-slot indexed-batching payload when this
+        // face can actually participate in a batch. BP-alpha faces (for
+        // instance) return false from can_batch_texture() and render on the
+        // scalar-sampler BLEND material shader — leaving mTextureList
+        // populated there would trick TexSetup into taking the indexed bind
+        // path (which no-ops on scalar samplers) and skipping the scalar
+        // DIFFUSE_MAP bind, producing diffuse-texture flicker as other
+        // draws shuffle GL unit state.
+        if (index < FACE_DO_NOT_BATCH_TEXTURES && can_batch_texture(facep))
         { //initialize texture list for texture batching
             draw_info->mTextureList.resize(index+1);
             draw_info->mTextureList[index] = tex;
+            populate_slot(draw_info.get(), index);
         }
         draw_info->validate();
     }
@@ -6146,10 +6418,16 @@ void LLVolumeGeometryManager::rebuildGeom(LLSpatialGroup* group)
         geometryBytes += genDrawInfo(group, fullbright_mask | extra_mask, sFullbrightFaces[i], fullbright_count[i], false, batch_textures, rigged);
         geometryBytes += genDrawInfo(group, alpha_mask | extra_mask, sAlphaFaces[i], alpha_count[i], alpha_sort, batch_textures, rigged);
         geometryBytes += genDrawInfo(group, bump_mask | extra_mask, sBumpFaces[i], bump_count[i], false, false, rigged);
-        geometryBytes += genDrawInfo(group, norm_mask | extra_mask, sNormFaces[i], norm_count[i], false, false, rigged);
-        geometryBytes += genDrawInfo(group, spec_mask | extra_mask, sSpecFaces[i], spec_count[i], false, false, rigged);
-        geometryBytes += genDrawInfo(group, normspec_mask | extra_mask, sNormSpecFaces[i], normspec_count[i], false, false, rigged);
-        geometryBytes += genDrawInfo(group, pbr_mask | extra_mask, sPbrFaces[i], pbr_count[i], false, false, rigged);
+        // Blinn-Phong (norm / spec / normspec) and PBR all participate in
+        // indexed-texture batching now. Without batch_textures=true, every
+        // face's mTextureIndex is set to FACE_DO_NOT_BATCH_TEXTURES and the
+        // vertex's position.w ends up 0, so every face in a batch samples slot
+        // 0 -- which populate_slot() then overwrites per face, producing the
+        // "shifting, wrong textures" symptom.
+        geometryBytes += genDrawInfo(group, norm_mask | extra_mask, sNormFaces[i], norm_count[i], false, batch_textures, rigged);
+        geometryBytes += genDrawInfo(group, spec_mask | extra_mask, sSpecFaces[i], spec_count[i], false, batch_textures, rigged);
+        geometryBytes += genDrawInfo(group, normspec_mask | extra_mask, sNormSpecFaces[i], normspec_count[i], false, batch_textures, rigged);
+        geometryBytes += genDrawInfo(group, pbr_mask | extra_mask, sPbrFaces[i], pbr_count[i], false, batch_textures, rigged);
 
         // for rigged set, add weights and disable alpha sorting (rigged items use depth buffer)
         extra_mask |= LLVertexBuffer::MAP_WEIGHT4;
@@ -6282,10 +6560,24 @@ struct CompareBatchBreaker
         {
             return lhs->getTexture() < rhs->getTexture();
         }
+        else if (lhs->getViewerObject() != rhs->getViewerObject())
+        {
+            // Stable tiebreaker by identity — prevents slot-assignment
+            // swapping across rebuilds when two faces share every other
+            // key. getDrawOrderIndex() used to be the last resort here,
+            // but it tracks add_face() insertion order which reshuffles
+            // as the octree/bridge walk changes with camera/avatar
+            // motion — visible as unique-slot material batches reassigning
+            // face→slot mappings every rebuild and the vertex buffer's
+            // texture_index lagging behind, which shows up as textures
+            // "swapping" on avatar attachments. Object pointer + TE offset
+            // is a pure function of the face's identity and doesn't
+            // depend on this frame's walk order.
+            return lhs->getViewerObject() < rhs->getViewerObject();
+        }
         else
         {
-            // all else being equal, maintain consistent draw order
-            return lhs->getDrawOrderIndex() < rhs->getDrawOrderIndex();
+            return lhs->getTEOffset() < rhs->getTEOffset();
         }
     }
 };
@@ -6403,6 +6695,33 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                     texture_list[texture_count++] = tex;
                 }
 
+                // For material/PBR faces, each face carries its own full
+                // per-slot payload (normal + spec/MR + emissive textures, plus
+                // material uniforms) that must NOT be shared between faces. If
+                // we let two such faces share a slot just because their diffuse
+                // pointers happen to match, populate_slot() would overwrite the
+                // first face's data with the second's and both would render
+                // with whichever was written last. Force a fresh slot for them.
+                auto needs_unique_slot = [](LLFace* f) {
+                    const LLTextureEntry* e = f->getTextureEntry();
+                    return e->getMaterialParams().notNull() || e->getGLTFRenderMaterial() != nullptr;
+                };
+                bool first_needs_unique = needs_unique_slot(facep);
+
+                // Slot cap for this batch. Material/PBR programs only declare
+                // indexed samplers up to 2 slots per group (see
+                // gDeferredMaterialProgram / gDeferredPBROpaque /
+                // gDeferredPBRAlpha program features) because all four groups
+                // at full sIndexedTextureChannels would exceed GL's 16-unit
+                // fragment-image-unit minimum once reserved samplers are
+                // added in. If ANY face in this batch is material/PBR, the
+                // whole batch must stay within that 2-slot budget — a
+                // material face assigned slot ≥ 2 would sample `texN` the
+                // program didn't declare (→ diffuseLookup switch default →
+                // magenta). Pure-legacy batches keep the full channel count.
+                static const S32 MATERIAL_INDEXED_SLOT_CAP = 2;
+                S32 slot_cap = first_needs_unique ? MATERIAL_INDEXED_SLOT_CAP : texture_index_channels;
+
                 if (can_batch_texture(facep))
                 { //populate texture_list with any textures that can be batched
                   //move i to the next unbatchable face
@@ -6417,9 +6736,18 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                             break;
                         }
 
-                        if (facep->getTexture() != tex)
+                        const bool this_needs_unique = needs_unique_slot(facep);
+                        if (this_needs_unique)
                         {
-                            if (distance_sort)
+                            // A material/PBR face joining a previously-legacy
+                            // batch pulls the cap down to the material
+                            // program's slot count.
+                            slot_cap = llmin(slot_cap, MATERIAL_INDEXED_SLOT_CAP);
+                        }
+
+                        if (facep->getTexture() != tex || this_needs_unique || first_needs_unique)
+                        {
+                            if (distance_sort && !this_needs_unique && !first_needs_unique)
                             { //textures might be out of order, see if texture exists in current batch
                                 bool found = false;
                                 for (U32 tex_idx = 0; tex_idx < texture_count; ++tex_idx)
@@ -6442,7 +6770,7 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                                 cur_tex++;
                             }
 
-                            if (cur_tex >= texture_index_channels)
+                            if (cur_tex >= slot_cap)
                             { //cut batches when index channels are depleted
                                 break;
                             }

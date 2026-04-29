@@ -375,6 +375,17 @@ public:
     void pushRiggedGLTFBatches(U32 type, bool textured);
     void pushUntexturedRiggedGLTFBatches(U32 type);
 
+    // Bind indexed-texture sampler arrays + per-slot uniform arrays for a
+    // batched drawinfo. Call with the shader already bound. Safe to call for
+    // single-slot drawinfos too (size == 1).
+    //
+    // For Blinn-Phong (params.mGLTFMaterial == null, params.mMaterial != null):
+    //   tex0..tex3, norm0..norm3, spec0..spec3, specular_colors, material_params
+    // For PBR (params.mGLTFMaterial != null):
+    //   tex*, norm*, spec*, emis*, pbr_factors, emissive_colors, four KHR
+    //   texture_*_transforms arrays
+    static void bindIndexedTextureArrays(LLDrawInfo& params);
+
     // push a single GLTF draw call
     static void pushGLTFBatch(LLDrawInfo& params);
     static void pushRiggedGLTFBatch(LLDrawInfo& params, const LLVOAvatar*& lastAvatar, U64& lastMeshId, bool& skipLastSkin);

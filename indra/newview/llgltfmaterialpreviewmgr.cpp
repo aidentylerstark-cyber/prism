@@ -279,7 +279,16 @@ PreviewSphere create_preview_sphere(LLPointer<LLFetchedGLTFMaterial>& material, 
         LLVertexBuffer::MAP_NORMAL |
         LLVertexBuffer::MAP_TEXCOORD0 |
         LLVertexBuffer::MAP_COLOR |
-        LLVertexBuffer::MAP_TANGENT
+        LLVertexBuffer::MAP_TANGENT |
+        // The PBR programs (gDeferredPBROpaqueProgram / gDeferredPBRAlphaProgram)
+        // have mIndexedTextureChannels set and therefore declare the
+        // `texture_index` vertex attribute via indexedTextureV.glsl. Without
+        // this bit the mTypeMask/data_mask assertion in LLVertexBuffer::
+        // setBuffer() fails the moment the preview sphere is drawn. Vertex
+        // positions here are LLVector4a with w=0, which means every vertex's
+        // texture_index ends up 0 → the preview samples tex0, which is what
+        // LLFetchedGLTFMaterial::bind() populates.
+        LLVertexBuffer::MAP_TEXTURE_INDEX
     );
     U32 nv = 0;
     U32 ni = 0;

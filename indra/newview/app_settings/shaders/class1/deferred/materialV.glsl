@@ -69,8 +69,12 @@ out vec2 vary_texcoord2;
 out vec4 vertex_color;
 out vec2 vary_texcoord0;
 
+void passTextureIndex();
+
 void main()
 {
+    passTextureIndex();
+
 #ifdef HAS_SKIN
     mat4 mat = getObjectSkinnedTransform();
 

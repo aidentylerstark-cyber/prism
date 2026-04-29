@@ -30,14 +30,40 @@
 
 // deferred opaque implementation
 
+#ifndef HAS_DIFFUSE_LOOKUP
 uniform sampler2D diffuseMap;  //always in sRGB space
+#endif
 
+#ifndef HAS_NORMAL_LOOKUP
+uniform sampler2D bumpMap;
+#endif
+#ifndef HAS_EMISSIVE_LOOKUP
+uniform sampler2D emissiveMap;
+#endif
+#ifndef HAS_SPECULAR_LOOKUP
+uniform sampler2D specularMap; // Packed: Occlusion, Metal, Roughness
+#endif
+
+// Per-slot PBR material params.
+//  pbr_factors:      x metallic, y roughness, z min_alpha, w _
+//  emissive_colors: .rgb emissive, .a _
+#ifdef HAS_DIFFUSE_LOOKUP
+uniform vec4 pbr_factors[4];
+uniform vec4 emissive_colors[4];
+#define PBR_METALLIC       pbr_factors[vary_texture_index].x
+#define PBR_ROUGHNESS      pbr_factors[vary_texture_index].y
+#define PBR_MIN_ALPHA      pbr_factors[vary_texture_index].z
+#define PBR_EMISSIVE       emissive_colors[vary_texture_index].rgb
+#else
 uniform float metallicFactor;
 uniform float roughnessFactor;
-uniform vec3 emissiveColor;
-uniform sampler2D bumpMap;
-uniform sampler2D emissiveMap;
-uniform sampler2D specularMap; // Packed: Occlusion, Metal, Roughness
+uniform vec3  emissiveColor;
+uniform float minimum_alpha;
+#define PBR_METALLIC       metallicFactor
+#define PBR_ROUGHNESS      roughnessFactor
+#define PBR_MIN_ALPHA      minimum_alpha
+#define PBR_EMISSIVE       emissiveColor
+#endif
 
 out vec4 frag_data[4];
 
@@ -51,8 +77,6 @@ in vec2 base_color_texcoord;
 in vec2 normal_texcoord;
 in vec2 metallic_roughness_texcoord;
 in vec2 emissive_texcoord;
-
-uniform float minimum_alpha; // PBR alphaMode: MASK, See: mAlphaCutoff, setAlphaCutoff()
 
 vec3 linear_to_srgb(vec3 c);
 vec3 srgb_to_linear(vec3 c);
@@ -69,12 +93,16 @@ void main()
 {
     mirrorClip(vary_position);
 
-    vec4 basecolor = texture(diffuseMap, base_color_texcoord.xy).rgba;
+#ifdef HAS_DIFFUSE_LOOKUP
+    vec4 basecolor = diffuseLookup(base_color_texcoord.xy);
+#else
+    vec4 basecolor = texture(diffuseMap, base_color_texcoord.xy);
+#endif
     basecolor.rgb = srgb_to_linear(basecolor.rgb);
 
     basecolor *= vertex_color;
 
-    if (basecolor.a < minimum_alpha)
+    if (basecolor.a < PBR_MIN_ALPHA)
     {
         discard;
     }
@@ -82,7 +110,11 @@ void main()
     vec3 col = basecolor.rgb;
 
     // from mikktspace.com
+#ifdef HAS_NORMAL_LOOKUP
+    vec3 vNt = normalLookup(normal_texcoord.xy).xyz*2.0-1.0;
+#else
     vec3 vNt = texture(bumpMap, normal_texcoord.xy).xyz*2.0-1.0;
+#endif
     float sign = vary_sign;
     vec3 vN = vary_normal;
     vec3 vT = vary_tangent.xyz;
@@ -91,17 +123,21 @@ void main()
     vec3 tnorm = normalize( vNt.x * vT + vNt.y * vB + vNt.z * vN );
 
     // RGB = Occlusion, Roughness, Metal
-    // default values, see LLViewerTexture::sDefaultPBRORMImagep
-    //   occlusion 1.0
-    //   roughness 0.0
-    //   metal     0.0
+#ifdef HAS_SPECULAR_LOOKUP
+    vec3 spec = specularLookup(metallic_roughness_texcoord.xy).rgb;
+#else
     vec3 spec = texture(specularMap, metallic_roughness_texcoord.xy).rgb;
+#endif
 
-    spec.g *= roughnessFactor;
-    spec.b *= metallicFactor;
+    spec.g *= PBR_ROUGHNESS;
+    spec.b *= PBR_METALLIC;
 
-    vec3 emissive = emissiveColor;
+    vec3 emissive = PBR_EMISSIVE;
+#ifdef HAS_EMISSIVE_LOOKUP
+    emissive *= srgb_to_linear(emissiveLookup(emissive_texcoord.xy).rgb);
+#else
     emissive *= srgb_to_linear(texture(emissiveMap, emissive_texcoord.xy).rgb);
+#endif
 
     tnorm *= gl_FrontFacing ? 1.0 : -1.0;
 

@@ -5423,6 +5423,13 @@ void LLViewerObject::changeTENormalMap(S32 index, LLViewerTexture* new_image)
         return ;
     }
     mTENormalMaps[index] = new_image ;
+    if (mDrawable.notNull() && index < mDrawable->getNumFaces())
+    {
+        if (LLFace* facep = mDrawable->getFace(index))
+        {
+            facep->setNormalMap(new_image);
+        }
+    }
     refreshMaterials();
 }
 
@@ -5433,6 +5440,13 @@ void LLViewerObject::changeTESpecularMap(S32 index, LLViewerTexture* new_image)
         return ;
     }
     mTESpecularMaps[index] = new_image ;
+    if (mDrawable.notNull() && index < mDrawable->getNumFaces())
+    {
+        if (LLFace* facep = mDrawable->getFace(index))
+        {
+            facep->setSpecularMap(new_image);
+        }
+    }
     refreshMaterials();
 }
 

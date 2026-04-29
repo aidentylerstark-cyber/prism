@@ -1013,13 +1013,10 @@ void LLRenderPass::pushBumpBatch(LLDrawInfo& params, bool texture, bool batch_te
 
     if (batch_textures && params.mTextureList.size() > 1)
     {
-        for (U32 i = 0; i < params.mTextureList.size(); ++i)
-        {
-            if (params.mTextureList[i].notNull())
-            {
-                gGL.getTexUnit(i)->bindFast(params.mTextureList[i]);
-            }
-        }
+        // Resolve each slot's unit via the shader's reserved-uniform table
+        // (tex0..tex3 → LLShaderMgr::INDEXED_TEXTURE_0..3) rather than
+        // assuming tex<s> is at unit <s>.
+        LLRenderPass::bindIndexedTextureArrays(params);
     }
     else
     { //not batching textures or batch has only 1 texture -- might need a texture matrix

@@ -341,6 +341,41 @@ public:
         SMAA_SEARCH_TEX,                    //  "searchTex"
         SMAA_BLEND_TEX,                     //  "blendTex"
 
+        // Indexed-texture batching samplers. Registered as reserved uniforms so
+        // the normal mapUniformTextureChannel() path auto-assigns each one a
+        // texture unit at link time; bind code then looks up the unit via
+        // mTexture[INDEXED_*_N] rather than guessing contiguous ranges.
+        INDEXED_TEXTURE_0,                  //  "tex0"
+        INDEXED_TEXTURE_1,                  //  "tex1"
+        INDEXED_TEXTURE_2,                  //  "tex2"
+        INDEXED_TEXTURE_3,                  //  "tex3"
+        INDEXED_NORMAL_0,                   //  "norm0"
+        INDEXED_NORMAL_1,                   //  "norm1"
+        INDEXED_NORMAL_2,                   //  "norm2"
+        INDEXED_NORMAL_3,                   //  "norm3"
+        INDEXED_SPECULAR_0,                 //  "spec0"
+        INDEXED_SPECULAR_1,                 //  "spec1"
+        INDEXED_SPECULAR_2,                 //  "spec2"
+        INDEXED_SPECULAR_3,                 //  "spec3"
+        INDEXED_EMISSIVE_0,                 //  "emis0"
+        INDEXED_EMISSIVE_1,                 //  "emis1"
+        INDEXED_EMISSIVE_2,                 //  "emis2"
+        INDEXED_EMISSIVE_3,                 //  "emis3"
+
+        // Per-slot material parameter arrays for indexed batching. Same idea
+        // as the sampler groups above — shader declares the array at size
+        // LLGLSLShader::sIndexedTextureChannels, bind code uploads via the
+        // reserved-uniform index rather than a hashed-string lookup so every
+        // consumer is looking at the same source of truth.
+        INDEXED_SPECULAR_COLORS,            //  "specular_colors"      (Blinn-Phong)
+        INDEXED_MATERIAL_PARAMS,            //  "material_params"      (Blinn-Phong)
+        INDEXED_PBR_FACTORS,                //  "pbr_factors"          (PBR)
+        INDEXED_EMISSIVE_COLORS,            //  "emissive_colors"      (PBR)
+        INDEXED_TEXTURE_BASE_COLOR_TRANSFORMS,         //  "texture_base_color_transforms"         (PBR)
+        INDEXED_TEXTURE_NORMAL_TRANSFORMS,             //  "texture_normal_transforms"             (PBR)
+        INDEXED_TEXTURE_METALLIC_ROUGHNESS_TRANSFORMS, //  "texture_metallic_roughness_transforms" (PBR)
+        INDEXED_TEXTURE_EMISSIVE_TRANSFORMS,           //  "texture_emissive_transforms"           (PBR)
+
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
     // clang-format on
@@ -355,7 +390,7 @@ public:
     void dumpShaderSource(U32 shader_code_count, GLchar** shader_code_text);
     bool    linkProgramObject(GLuint obj, bool suppress_errors = false);
     bool    validateProgramObject(GLuint obj);
-    GLuint loadShaderFile(const std::string& filename, S32 & shader_level, GLenum type, std::map<std::string, std::string>* defines = NULL, S32 texture_index_channels = -1);
+    GLuint loadShaderFile(const std::string& filename, S32 & shader_level, GLenum type, std::map<std::string, std::string>* defines = NULL, S32 texture_index_channels = -1, S32 normal_index_channels = 0, S32 specular_index_channels = 0, S32 emissive_index_channels = 0);
 
     // Implemented in the application to actually point to the shader directory.
     virtual std::string getShaderDirPrefix(void) = 0; // Pure Virtual

@@ -40,6 +40,7 @@
 #include "llrendertarget.h"
 #include "llreflectionmapmanager.h"
 #include "llheroprobemanager.h"
+#include "llgltexture.h"
 
 #include <stack>
 
@@ -793,7 +794,9 @@ public:
     //noise map
     U32                 mNoiseMap;
     U32                 mTrueNoiseMap;
-    U32                 mLightFunc;
+    // Blinn-Phong specular LUT. Wrapped in LLGLTexture so it can flow through
+    // the modern shader->bindTexture(reserved, LLTexture*) API.
+    LLPointer<LLGLTexture> mLightFunc;
 
     //smaa
     U32                 mSMAAAreaMap = 0;

@@ -115,6 +115,35 @@ public:
 
     std::vector<LLPointer<LLViewerTexture> > mTextureList;
 
+    // Parallel per-slot data for indexed-texture batching of material/PBR faces.
+    // Entry i of each list corresponds to texture_index == i. When a draw is not
+    // batched (mTextureList.size() <= 1) these stay empty and the singular
+    // mTexture / mNormalMap / mSpecularMap / mSpecColor fields are used.
+    std::vector<LLPointer<LLViewerTexture> > mNormalList;
+    std::vector<LLPointer<LLViewerTexture> > mSpecularList;   // also metallic-roughness for PBR
+    std::vector<LLPointer<LLViewerTexture> > mEmissiveList;   // PBR only
+
+    // Blinn-Phong per-slot uniforms.
+    //   mSpecularColors[i]  : xyz rgb, w glossiness exponent
+    //   mMaterialParams[i]  : x env_intensity, y minimum_alpha, z emissive_brightness,
+    //                         w face color alpha (true transparency; vertex_color.a can
+    //                         carry shiny-in-alpha encoding instead, see LLFace::getGeometryVolume)
+    std::vector<LLVector4> mSpecularColors;
+    std::vector<LLVector4> mMaterialParams;
+
+    // PBR per-slot uniforms.
+    //   mPbrFactors[i]      : x metallic, y roughness, z min_alpha, w _
+    //   mEmissiveColors[i]  : rgb emissive, a _
+    std::vector<LLVector4> mPbrFactors;
+    std::vector<LLVector4> mEmissiveColors;
+
+    // PBR KHR_texture_transform per slot. Each slot stores 2 vec4s (packed repeat/offset/rotation),
+    // packed contiguously so uniform upload is a single vec4 array of length 2 * slots.
+    std::vector<LLVector4> mBaseColorXform;          // size = 2 * slots
+    std::vector<LLVector4> mNormalXform;
+    std::vector<LLVector4> mMetallicRoughnessXform;
+    std::vector<LLVector4> mEmissiveXform;
+
     LLUUID mMaterialID; // id of LLGLTFMaterial or LLMaterial applied to this draw info
 
     U32 mShaderMask = 0;

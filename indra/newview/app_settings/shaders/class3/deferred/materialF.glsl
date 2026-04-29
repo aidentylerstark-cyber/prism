@@ -34,9 +34,41 @@
 #define DIFFUSE_ALPHA_MODE_MASK     2
 #define DIFFUSE_ALPHA_MODE_EMISSIVE 3
 
-uniform float emissive_brightness;  // fullbright flag, 1.0 == fullbright, 0.0 otherwise
 uniform int sun_up_factor;
 uniform int classic_mode;
+
+// Per-slot material params for indexed-texture batching.
+// Fallback to scalar uniforms when not indexed.
+#ifdef HAS_DIFFUSE_LOOKUP
+uniform vec4 specular_colors[4];
+uniform vec4 material_params[4]; // x env_intensity, y minimum_alpha, z emissive_brightness, w face color alpha
+#define MAT_SPEC_COLOR           specular_colors[vary_texture_index]
+#define MAT_ENV_INTENSITY        material_params[vary_texture_index].x
+#define MAT_MINIMUM_ALPHA        material_params[vary_texture_index].y
+#define MAT_EMISSIVE_BRIGHTNESS  material_params[vary_texture_index].z
+// For Blinn-Phong materials without a specular map, LLFace::getGeometryVolume
+// packs SHININESS_TO_ALPHA[shiny] into vertex_color.a so the legacy lighting
+// path can recover glossiness from the vertex stream. That hack clobbers the
+// face's real transparency, so the per-slot material array carries the true
+// color alpha in .w and the BLEND output uses it instead of vertex_color.a.
+#define MAT_COLOR_ALPHA          material_params[vary_texture_index].w
+#else
+uniform float emissive_brightness;
+uniform float env_intensity;
+uniform vec4  specular_color;
+#define MAT_SPEC_COLOR          specular_color
+#define MAT_ENV_INTENSITY       env_intensity
+#define MAT_EMISSIVE_BRIGHTNESS emissive_brightness
+// Scalar fallback has no equivalent — vertex_color.a wasn't shiny-encoded on
+// pre-indexed material programs (they were only bound for non-alpha
+// drawinfos, where shiny-in-alpha applies safely), so use vertex_color.a.
+#define MAT_COLOR_ALPHA         vertex_color.a
+#if (DIFFUSE_ALPHA_MODE == DIFFUSE_ALPHA_MODE_MASK)
+uniform float minimum_alpha;
+#define MAT_MINIMUM_ALPHA       minimum_alpha
+#endif
+#endif
+
 
 vec4 applySkyAndWaterFog(vec3 pos, vec3 additive, vec3 atten, vec4 color);
 vec3 scaleSoftClipFragLinear(vec3 l);
@@ -188,23 +220,22 @@ vec3 calcPointLightOrSpotLight(vec3 light_col, vec3 npos, vec3 diffuse, vec4 spe
 out vec4 frag_data[4];
 #endif
 
+#ifndef HAS_DIFFUSE_LOOKUP
 uniform sampler2D diffuseMap;  //always in sRGB space
+#endif
 
 #ifdef HAS_NORMAL_MAP
+#ifndef HAS_NORMAL_LOOKUP
 uniform sampler2D bumpMap;
+#endif
 #endif
 
 #ifdef HAS_SPECULAR_MAP
+#ifndef HAS_SPECULAR_LOOKUP
 uniform sampler2D specularMap;
-
-in vec2 vary_texcoord2;
 #endif
 
-uniform float env_intensity;
-uniform vec4 specular_color;  // specular color RGB and specular exponent (glossiness) in alpha
-
-#if (DIFFUSE_ALPHA_MODE == DIFFUSE_ALPHA_MODE_MASK)
-uniform float minimum_alpha;
+in vec2 vary_texcoord2;
 #endif
 
 #ifdef HAS_NORMAL_MAP
@@ -223,7 +254,11 @@ in vec2 vary_texcoord0;
 vec3 getNormal(inout float glossiness)
 {
 #ifdef HAS_NORMAL_MAP
+#ifdef HAS_NORMAL_LOOKUP
+    vec4 vNt = normalLookup(vary_texcoord1.xy);
+#else
     vec4 vNt = texture(bumpMap, vary_texcoord1.xy);
+#endif
     glossiness *= vNt.a;
     vNt.xyz = vNt.xyz * 2 - 1;
     float sign = vary_sign;
@@ -241,11 +276,16 @@ vec3 getNormal(inout float glossiness)
 
 vec4 getSpecular()
 {
+    vec4 mat_spec = MAT_SPEC_COLOR;
 #ifdef HAS_SPECULAR_MAP
-    vec4 spec = texture(specularMap, vary_texcoord2.xy);
-    spec.rgb *= specular_color.rgb;
+#ifdef HAS_SPECULAR_LOOKUP
+    vec4 spec = specularLookup(vary_texcoord2.xy);
 #else
-    vec4 spec = vec4(specular_color.rgb, 1.0);
+    vec4 spec = texture(specularMap, vary_texcoord2.xy);
+#endif
+    spec.rgb *= mat_spec.rgb;
+#else
+    vec4 spec = vec4(mat_spec.rgb, 1.0);
 #endif
     return spec;
 }
@@ -255,7 +295,7 @@ void alphaMask(float alpha)
 #if (DIFFUSE_ALPHA_MODE == DIFFUSE_ALPHA_MODE_MASK)
     // Comparing floats cast from 8-bit values, produces acne right at the 8-bit transition points
     float bias = 0.001953125; // 1/512, or half an 8-bit quantization
-    if (alpha < minimum_alpha-bias)
+    if (alpha < MAT_MINIMUM_ALPHA-bias)
     {
         discard;
     }
@@ -271,10 +311,11 @@ void waterClip()
 
 float getEmissive(vec4 diffcol)
 {
+    float eb = MAT_EMISSIVE_BRIGHTNESS;
 #if (DIFFUSE_ALPHA_MODE != DIFFUSE_ALPHA_MODE_EMISSIVE)
-    return emissive_brightness;
+    return eb;
 #else
-    return max(diffcol.a, emissive_brightness);
+    return max(diffcol.a, eb);
 #endif
 }
 
@@ -297,14 +338,18 @@ void main()
     waterClip();
 
     // diffcol == diffuse map combined with vertex color
+#ifdef HAS_DIFFUSE_LOOKUP
+    vec4 diffcol = diffuseLookup(vary_texcoord0.xy);
+#else
     vec4 diffcol = texture(diffuseMap, vary_texcoord0.xy);
+#endif
     diffcol.rgb *= vertex_color.rgb;
     alphaMask(diffcol.a);
 
     // spec == specular map combined with specular color
     vec4 spec = getSpecular();
-    float env = env_intensity * spec.a;
-    float glossiness = specular_color.a;
+    float env = MAT_ENV_INTENSITY * spec.a;
+    float glossiness = MAT_SPEC_COLOR.a;
     vec3 norm = getNormal(glossiness);
 
     float emissive = getEmissive(diffcol);
@@ -420,7 +465,10 @@ void main()
 
     glare *= 1.0-emissive;
     glare = min(glare, 1.0);
-    float al = max(diffcol.a, glare) * vertex_color.a;
+    // vertex_color.a may carry shiny-in-alpha for spec-less Blinn-Phong
+    // materials (see LLFace::getGeometryVolume), so the per-slot color alpha
+    // is the authoritative transparency source here.
+    float al = max(diffcol.a, glare) * MAT_COLOR_ALPHA;
     float final_scale = 1;
     if (classic_mode > 0)
         final_scale = 1.1;

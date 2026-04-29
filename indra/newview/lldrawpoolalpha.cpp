@@ -426,18 +426,26 @@ bool LLDrawPoolAlpha::TexSetup(LLDrawInfo* draw, bool use_material)
             current_shader->bindTexture(LLShaderMgr::BUMP_MAP, LLViewerFetchedTexture::sFlatNormalImagep);
             current_shader->bindTexture(LLShaderMgr::SPECULAR_MAP, LLViewerFetchedTexture::sWhiteImagep);
         }
-        if (draw->mTextureList.size() > 1)
+        if (!draw->mTextureList.empty())
         {
-            for (U32 i = 0; i < draw->mTextureList.size(); ++i)
+            // Route through the indexed-bind helper so norm/spec/emis
+            // samplers and per-slot uniform arrays (specular_colors,
+            // material_params) get populated. Works for both batched and
+            // single-slot drawinfos since the Blinn-Phong material program is
+            // always the indexed variant now.
+            LLRenderPass::bindIndexedTextureArrays(*draw);
+
+            if (draw->mTextureMatrix && draw->mTextureList.size() == 1)
             {
-                if (draw->mTextureList[i].notNull())
-                {
-                    gGL.getTexUnit(i)->bindFast(draw->mTextureList[i]);
-                }
+                tex_setup = true;
+                gGL.getTexUnit(0)->activate();
+                gGL.matrixMode(LLRender::MM_TEXTURE);
+                gGL.loadMatrix((GLfloat*)draw->mTextureMatrix->mMatrix);
+                gPipeline.mTextureMatrixOps++;
             }
         }
         else
-        { //not batching textures or batch has only 1 texture -- might need a texture matrix
+        { // no texture list at all -- legacy single-texture fallback
             if (draw->mTexture.notNull())
             {
                 if (use_material)
@@ -677,7 +685,20 @@ void LLDrawPoolAlpha::renderAlpha(U32 mask, bool depth_only, bool rigged)
                         gPipeline.bindDeferredShaderFast(*target_shader);
                     }
 
-                    params.mGLTFMaterial->bind(params.mTexture);
+                    // Batched drawinfos carry per-slot indexed sampler arrays
+                    // + uniform arrays populated by genDrawInfo/registerFace.
+                    // Route through the same indexed-bind path as pushGLTFBatch
+                    // so norm/spec/emis samplers and transforms/factors get
+                    // their per-slot data (singular mGLTFMaterial->bind writes
+                    // scalar uniforms that don't exist in the indexed shader).
+                    if (!params.mTextureList.empty())
+                    {
+                        LLRenderPass::bindIndexedTextureArrays(params);
+                    }
+                    else
+                    {
+                        params.mGLTFMaterial->bind(params.mTexture);
+                    }
                 }
                 else
                 {

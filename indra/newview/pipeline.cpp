@@ -394,7 +394,7 @@ LLPipeline::LLPipeline() :
 {
     mNoiseMap = 0;
     mTrueNoiseMap = 0;
-    mLightFunc = 0;
+    mLightFunc = nullptr;
 
     for(U32 i = 0; i < 8; i++)
     {
@@ -1215,10 +1215,11 @@ void LLPipeline::releaseGLBuffers()
 
 void LLPipeline::releaseLUTBuffers()
 {
-    if (mLightFunc)
+    if (mLightFunc.notNull())
     {
-        LLImageGL::deleteTextures(1, &mLightFunc);
-        mLightFunc = 0;
+        // LLPointer destruction runs LLGLTexture::~LLGLTexture which frees
+        // the underlying GL texture via its LLImageGL.
+        mLightFunc = nullptr;
     }
 
     mPbrBrdfLut.release();
@@ -1421,7 +1422,7 @@ F32 lerpf(F32 a, F32 b, F32 w)
 
 void LLPipeline::createLUTBuffers()
 {
-    if (!mLightFunc)
+    if (mLightFunc.isNull())
     {
         U32 lightResX = gSavedSettings.getU32("RenderSpecularResX");
         U32 lightResY = gSavedSettings.getU32("RenderSpecularResY");
@@ -1471,13 +1472,31 @@ void LLPipeline::createLUTBuffers()
             pix_format = GL_R32F;
         }
 #endif
-        LLImageGL::generateTextures(1, &mLightFunc);
-        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mLightFunc);
+        // Generate the GL texture and set it up, then wrap it in an
+        // LLGLTexture so the shader bindTexture(reserved, LLTexture*) path
+        // can consume it without a raw-GLuint overload.
+        GLuint tex_name = 0;
+        LLImageGL::generateTextures(1, &tex_name);
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, tex_name);
         LLImageGL::setManualImage(LLTexUnit::getInternalType(LLTexUnit::TT_TEXTURE), 0, pix_format, lightResX, lightResY, GL_RED, GL_FLOAT, ls, false);
         gGL.getTexUnit(0)->setTextureAddressMode(LLTexUnit::TAM_CLAMP);
         gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_TRILINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+        // LLGLTexture defers creation of its internal LLImageGL — setTexName
+        // asserts on a null mGLTexturep, so allocate width/height/components
+        // first, call generateGLTexture() to instantiate the empty LLImageGL
+        // (it does NOT create a GL texture on its own), then adopt the
+        // already-generated GL texture name. setExplicitFormat mirrors the
+        // R16F / R32F setManualImage call above so LLImageGL's metadata
+        // tracks the real GL storage format rather than guessing from the
+        // component count.
+        constexpr U8 components = 1; // single red channel (R16F / R32F)
+        mLightFunc = new LLGLTexture(lightResX, lightResY, components, false /* no mipmaps */);
+        mLightFunc->generateGLTexture();
+        mLightFunc->setExplicitFormat(pix_format, GL_RED, GL_FLOAT);
+        mLightFunc->setTexName(tex_name);
 
         delete [] ls;
     }
@@ -8161,17 +8180,12 @@ void LLPipeline::renderFinalize()
 
 void LLPipeline::bindLightFunc(LLGLSLShader& shader)
 {
-    S32 channel = shader.enableTexture(LLShaderMgr::DEFERRED_LIGHTFUNC);
-    if (channel > -1)
-    {
-        gGL.getTexUnit(channel)->bindManual(LLTexUnit::TT_TEXTURE, mLightFunc);
-    }
-
-    channel = shader.enableTexture(LLShaderMgr::DEFERRED_BRDF_LUT, LLTexUnit::TT_TEXTURE);
-    if (channel > -1)
-    {
-        mPbrBrdfLut.bindTexture(0, channel);
-    }
+    // Modern one-shot bind through the shader's reserved-uniform channel
+    // table, same pattern the rest of pipeline.cpp uses for DEFERRED_DIFFUSE/
+    // DEFERRED_DEPTH/etc. Skips the enableTexture→glActiveTexture+glEnable
+    // legacy pair that the old fixed-function bind pipeline relied on.
+    shader.bindTexture(LLShaderMgr::DEFERRED_LIGHTFUNC, mLightFunc);
+    shader.bindTexture(LLShaderMgr::DEFERRED_BRDF_LUT, &mPbrBrdfLut);
 }
 
 void LLPipeline::bindShadowMaps(LLGLSLShader& shader)

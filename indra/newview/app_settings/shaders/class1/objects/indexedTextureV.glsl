@@ -32,3 +32,10 @@ void passTextureIndex()
     vary_texture_index = texture_index;
 }
 
+// Accessor so other vertex shaders don't need to redeclare `in int texture_index`
+// (redeclaring it across shader objects can confuse some GLSL linkers).
+int getTextureIndex()
+{
+    return texture_index;
+}
+

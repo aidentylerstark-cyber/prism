@@ -455,7 +455,7 @@ bool LLGLSLShader::createShader()
         vector< pair<string, GLenum> >::iterator fileIter = mShaderFiles.begin();
         for (; fileIter != mShaderFiles.end(); fileIter++)
         {
-            GLuint shaderhandle = LLShaderMgr::instance()->loadShaderFile((*fileIter).first, mShaderLevel, (*fileIter).second, &mDefines, mFeatures.mIndexedTextureChannels);
+            GLuint shaderhandle = LLShaderMgr::instance()->loadShaderFile((*fileIter).first, mShaderLevel, (*fileIter).second, &mDefines, mFeatures.mIndexedTextureChannels, mFeatures.mIndexedNormalChannels, mFeatures.mIndexedSpecularChannels, mFeatures.mIndexedEmissiveChannels);
             LL_DEBUGS("ShaderLoading") << "SHADER FILE: " << (*fileIter).first << " mShaderLevel=" << mShaderLevel << LL_ENDL;
             if (shaderhandle)
             {
@@ -500,42 +500,103 @@ bool LLGLSLShader::createShader()
             unloadInternal();
         }
     }
-    else if (mFeatures.mIndexedTextureChannels > 0)
-    { //override texture channels for indexed texture rendering
-        llassert(mFeatures.mIndexedTextureChannels == LLGLSLShader::sIndexedTextureChannels); // these numbers must always match
+    // Indexed-texture samplers (tex0..tex3, norm0..norm3, spec0..spec3,
+    // emis0..emis3) are registered as reserved uniforms in LLShaderMgr so
+    // mapUniformTextureChannel() already assigned each one a texture unit and
+    // populated mTexture[INDEXED_*_N] during mapUniforms(). That makes the
+    // "which unit did this sampler land on" question answerable — but the
+    // units are in whatever order glGetActiveUniform happened to enumerate
+    // them, which is driver-dependent. A lot of bind code (including single-
+    // texture fast paths like `gGL.getTexUnit(0)->bindFast(params.mTexture)`
+    // in the simple/bump pools) implicitly assumes tex0 sits at unit 0, tex1
+    // at unit 1, etc. Rather than auditing every such site, pin the indexed
+    // samplers to deterministic contiguous ranges:
+    //   tex*  at [0 ..  N-1]    norm* at [N  .. 2N-1]
+    //   spec* at [2N .. 3N-1]   emis* at [3N .. 4N-1]
+    // and shift any reserved sampler that landed inside the total pinned
+    // range past it. mTexture[INDEXED_*_N] is updated in lockstep so the
+    // lookup-based binders (bindIndexedTextureArrays, etc.) still get the
+    // right answer on every shader regardless of which subset of the four
+    // groups that shader actually enabled.
+    if (mFeatures.mIndexedTextureChannels  > 0 ||
+        mFeatures.mIndexedNormalChannels   > 0 ||
+        mFeatures.mIndexedSpecularChannels > 0 ||
+        mFeatures.mIndexedEmissiveChannels > 0)
+    {
         bind();
-        S32 channel_count = mFeatures.mIndexedTextureChannels;
 
-        for (S32 i = 0; i < channel_count; i++)
+        struct IndexedGroup
         {
-            LLStaticHashedString uniName(llformat("tex%d", i));
-            uniform1i(uniName, i);
+            S32 count;
+            S32 reserved_base;  // LLShaderMgr::INDEXED_*_0
+        };
+        const IndexedGroup groups[] = {
+            { mFeatures.mIndexedTextureChannels,  LLShaderMgr::INDEXED_TEXTURE_0  },
+            { mFeatures.mIndexedNormalChannels,   LLShaderMgr::INDEXED_NORMAL_0   },
+            { mFeatures.mIndexedSpecularChannels, LLShaderMgr::INDEXED_SPECULAR_0 },
+            { mFeatures.mIndexedEmissiveChannels, LLShaderMgr::INDEXED_EMISSIVE_0 },
+        };
+
+        // Pass 1: assign each indexed sampler its pinned unit (contiguous,
+        // starting at 0). Only touch samplers that are actually declared on
+        // this program; mTexture[reserved_idx] == -1 means the shader
+        // omitted that sampler (e.g. a material program with tex/norm/spec
+        // but no emis), and we leave the entry at -1 so lookup-based binds
+        // correctly skip that slot.
+        S32 total_indexed = 0;
+        for (const auto& g : groups)
+        {
+            for (S32 i = 0; i < g.count; i++)
+            {
+                const S32 reserved_idx = g.reserved_base + i;
+                if (mTexture[reserved_idx] < 0)
+                {
+                    continue;
+                }
+                const S32 new_unit = total_indexed + i;
+                uniform1i(reserved_idx, new_unit);
+                mTexture[reserved_idx] = new_unit;
+            }
+            total_indexed += g.count;
         }
 
-        //adjust any texture channels that might have been overwritten
+        auto is_indexed_entry = [&](U32 idx)
+        {
+            for (const auto& g : groups)
+            {
+                if ((S32)idx >= g.reserved_base && (S32)idx < g.reserved_base + g.count)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Pass 2: evict any non-indexed reserved sampler that landed inside
+        // the pinned range. Walk fresh units upward from total_indexed,
+        // skipping past anything already assigned there.
+        S32 next_free = total_indexed;
         for (U32 i = 0; i < mTexture.size(); i++)
         {
-            if (mTexture[i] > -1)
+            if (is_indexed_entry(i)) continue;
+            if (mTexture[i] < 0) continue;
+            if (mTexture[i] >= total_indexed)
             {
-                S32 new_tex = mTexture[i] + channel_count;
-                uniform1i(i, new_tex);
-                mTexture[i] = new_tex;
+                next_free = llmax(next_free, mTexture[i] + 1);
+                continue;
             }
+            // Collision with pinned range — push past it.
+            uniform1i(i, next_free);
+            mTexture[i] = next_free;
+            next_free++;
         }
 
-        // get the true number of active texture channels
-        mActiveTextureChannels = channel_count;
-        for (auto& tex : mTexture)
-        {
-            mActiveTextureChannels = llmax(mActiveTextureChannels, tex + 1);
-        }
-
-        // when indexed texture channels are used, enforce an upper limit of 16
-        // this should act as a canary in the coal mine for adding textures
-        // and breaking machines that are limited to 16 texture channels
-        llassert(mActiveTextureChannels <= 16);
+        mActiveTextureChannels = llmax(mActiveTextureChannels, next_free);
         unbind();
     }
+
+    // Canary: guard against exceeding 32 units (hardware minimum for GL 3.3+ core).
+    llassert(mActiveTextureChannels <= 32);
 
     LL_DEBUGS("GLSLTextureChannels") << mName << " has " << mActiveTextureChannels << " active texture channels" << LL_ENDL;
 

@@ -587,13 +587,12 @@ void LLRenderPass::pushBatch(LLDrawInfo& params, bool texture, bool batch_textur
     {
         if (batch_textures && params.mTextureList.size() > 1)
         {
-            for (U32 i = 0; i < params.mTextureList.size(); ++i)
-            {
-                if (params.mTextureList[i].notNull())
-                {
-                    gGL.getTexUnit(i)->bindFast(params.mTextureList[i]);
-                }
-            }
+            // Resolve each slot's unit via the shader's reserved-uniform table
+            // (tex0..tex3 → LLShaderMgr::INDEXED_TEXTURE_0..3) rather than
+            // assuming tex<s> is at unit <s>. Non-material drawinfos leave
+            // mNormalList / mSpecularList / mEmissiveList and the per-slot
+            // uniform arrays empty, so this call only binds diffuse slots.
+            bindIndexedTextureArrays(params);
         }
         else
         { //not batching textures or batch has only 1 texture -- might need a texture matrix
@@ -814,11 +813,134 @@ void LLRenderPass::pushUntexturedGLTFBatches(U32 type)
 }
 
 // static
+void LLRenderPass::bindIndexedTextureArrays(LLDrawInfo& params)
+{
+    if (params.mTextureList.empty())
+    {
+        return;
+    }
+
+    LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
+    if (!shader)
+    {
+        return;
+    }
+
+    // Bind through the reserved-uniform direct-bind API. `bindTexture`
+    // resolves `mTexture[reserved]` and calls bindFast internally, and
+    // silently no-ops when the sampler isn't declared on the current
+    // program (`mTexture[reserved] == -1`). That's the fallback for
+    // scalar shaders and for groups (e.g. emissive on a Blinn-Phong
+    // program) that weren't enabled on the currently-bound shader —
+    // keeps the "one source of truth" discipline for unit resolution.
+    auto bind_group = [&](const std::vector<LLPointer<LLViewerTexture>>& list, S32 reserved_base)
+    {
+        const U32 count = (U32)list.size();
+        for (U32 s = 0; s < count; ++s)
+        {
+            if (list[s].isNull())
+                continue;
+            shader->bindTexture(reserved_base + (S32)s, list[s].get());
+        }
+    };
+
+    bind_group(params.mTextureList,  LLShaderMgr::INDEXED_TEXTURE_0);
+    bind_group(params.mNormalList,   LLShaderMgr::INDEXED_NORMAL_0);
+    bind_group(params.mSpecularList, LLShaderMgr::INDEXED_SPECULAR_0);
+    bind_group(params.mEmissiveList, LLShaderMgr::INDEXED_EMISSIVE_0);
+
+    // Per-slot material parameter arrays. Upload via the reserved-uniform
+    // index (not a hashed string) so the "declared on this shader" check is
+    // the same one used for sampler binds — shader->mUniform[i] < 0 means
+    // the program didn't declare that array and shader->uniform4fv() is a
+    // no-op. Keeps the "one source of truth" discipline for every piece of
+    // per-slot data, not just the samplers.
+    auto upload = [&](U32 reserved, const std::vector<LLVector4>& v)
+    {
+        if (!v.empty())
+            shader->uniform4fv(reserved, (U32)v.size(), (const GLfloat*)v.data());
+    };
+
+    // Blinn-Phong per-slot uniforms
+    upload(LLShaderMgr::INDEXED_SPECULAR_COLORS, params.mSpecularColors);
+    upload(LLShaderMgr::INDEXED_MATERIAL_PARAMS, params.mMaterialParams);
+
+    // PBR per-slot uniforms
+    upload(LLShaderMgr::INDEXED_PBR_FACTORS,                          params.mPbrFactors);
+    upload(LLShaderMgr::INDEXED_EMISSIVE_COLORS,                      params.mEmissiveColors);
+    upload(LLShaderMgr::INDEXED_TEXTURE_BASE_COLOR_TRANSFORMS,        params.mBaseColorXform);
+    upload(LLShaderMgr::INDEXED_TEXTURE_NORMAL_TRANSFORMS,            params.mNormalXform);
+    upload(LLShaderMgr::INDEXED_TEXTURE_METALLIC_ROUGHNESS_TRANSFORMS,params.mMetallicRoughnessXform);
+    upload(LLShaderMgr::INDEXED_TEXTURE_EMISSIVE_TRANSFORMS,          params.mEmissiveXform);
+}
+
 void LLRenderPass::pushGLTFBatch(LLDrawInfo& params)
 {
     auto& mat = params.mGLTFMaterial;
 
-    if (mat.notNull())
+    // Pick the bind path based on what the *currently bound* program
+    // actually declares. The main deferred PBR programs (opaque, alpha,
+    // alpha-mask) are indexed — they declare tex0..tex3 and the per-slot
+    // factor/transform arrays, so we go through bindIndexedTextureArrays.
+    // The shadow-pass PBR programs (gDeferredShadowGLTFAlphaMask /
+    // gDeferredShadowGLTFAlphaBlend) are still scalar-only and declare
+    // diffuseMap + minimum_alpha; for those we fall back to the singular
+    // LLFetchedGLTFMaterial::bind() path so alpha-mask discard actually
+    // gets a diffuse and cutoff uploaded. Probe by asking the shader
+    // whether it has `tex0` — indexed-capable programs will, scalar-only
+    // ones won't (mTexture[INDEXED_TEXTURE_0] stays at -1 from link-time).
+    LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
+    const bool shader_is_indexed =
+        shader && shader->mTexture[LLShaderMgr::INDEXED_TEXTURE_0] >= 0;
+
+    if (shader_is_indexed && !params.mTextureList.empty())
+    {
+        bindIndexedTextureArrays(params);
+    }
+    else if (shader_is_indexed && mat.notNull())
+    {
+        // Drawinfo didn't go through populate_slot (e.g. the GLTF material
+        // preview manager constructs LLDrawInfo directly). Synthesize a
+        // 1-slot bind from the gltf_mat so the indexed shader gets tex0,
+        // norm0, spec0, emis0, pbr_factors[0], emissive_colors[0], and the
+        // four KHR transform arrays populated. Equivalent to
+        // populate_slot()'s PBR branch for slot=0, but without reaching
+        // into LLVolumeGeometryManager.
+        LLViewerTexture* base_tex = params.mTexture ? params.mTexture.get() : mat->mBaseColorTexture.get();
+        if (!base_tex) base_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+        LLViewerTexture* normal_tex = mat->mNormalTexture.get();
+        if (!normal_tex || normal_tex->getDiscardLevel() > 4)
+            normal_tex = LLViewerFetchedTexture::sFlatNormalImagep.get();
+        LLViewerTexture* mr_tex = mat->mMetallicRoughnessTexture.get();
+        if (!mr_tex) mr_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+        LLViewerTexture* emissive_tex = mat->mEmissiveTexture.get();
+        if (!emissive_tex) emissive_tex = LLViewerFetchedTexture::sWhiteImagep.get();
+
+        // Reserved-uniform direct binds: no-ops on shaders that don't
+        // declare the sampler (scalar shadow-pass PBR programs hit the
+        // other branch; indexed programs reach this one).
+        shader->bindTexture(LLShaderMgr::INDEXED_TEXTURE_0,  base_tex);
+        shader->bindTexture(LLShaderMgr::INDEXED_NORMAL_0,   normal_tex);
+        shader->bindTexture(LLShaderMgr::INDEXED_SPECULAR_0, mr_tex);
+        shader->bindTexture(LLShaderMgr::INDEXED_EMISSIVE_0, emissive_tex);
+
+        const F32 min_alpha = (mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_MASK) ? mat->mAlphaCutoff : -1.f;
+        const LLVector4 pbr_factors(mat->mMetallicFactor, mat->mRoughnessFactor, min_alpha, 0.f);
+        const LLVector4 emissive(mat->mEmissiveColor.mV[0], mat->mEmissiveColor.mV[1], mat->mEmissiveColor.mV[2], 0.f);
+        shader->uniform4fv(LLShaderMgr::INDEXED_PBR_FACTORS,     1, pbr_factors.mV);
+        shader->uniform4fv(LLShaderMgr::INDEXED_EMISSIVE_COLORS, 1, emissive.mV);
+
+        F32 packed[8];
+        mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR].getPacked(packed);
+        shader->uniform4fv(LLShaderMgr::INDEXED_TEXTURE_BASE_COLOR_TRANSFORMS, 2, packed);
+        mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_NORMAL].getPacked(packed);
+        shader->uniform4fv(LLShaderMgr::INDEXED_TEXTURE_NORMAL_TRANSFORMS, 2, packed);
+        mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS].getPacked(packed);
+        shader->uniform4fv(LLShaderMgr::INDEXED_TEXTURE_METALLIC_ROUGHNESS_TRANSFORMS, 2, packed);
+        mat->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_EMISSIVE].getPacked(packed);
+        shader->uniform4fv(LLShaderMgr::INDEXED_TEXTURE_EMISSIVE_TRANSFORMS, 2, packed);
+    }
+    else if (mat.notNull())
     {
         mat->bind(params.mTexture);
     }

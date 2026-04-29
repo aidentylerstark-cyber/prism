@@ -27,14 +27,38 @@
 
 #ifndef IS_HUD
 
+#ifndef HAS_DIFFUSE_LOOKUP
 uniform sampler2D diffuseMap;  //always in sRGB space
+#endif
+#ifndef HAS_NORMAL_LOOKUP
 uniform sampler2D bumpMap;
+#endif
+#ifndef HAS_EMISSIVE_LOOKUP
 uniform sampler2D emissiveMap;
+#endif
+#ifndef HAS_SPECULAR_LOOKUP
 uniform sampler2D specularMap; // PBR: Packed: Occlusion, Metal, Roughness
+#endif
 
+#ifdef HAS_DIFFUSE_LOOKUP
+uniform vec4 pbr_factors[4];
+uniform vec4 emissive_colors[4];
+#define PBR_METALLIC  pbr_factors[vary_texture_index].x
+#define PBR_ROUGHNESS pbr_factors[vary_texture_index].y
+#define PBR_MIN_ALPHA pbr_factors[vary_texture_index].z
+#define PBR_EMISSIVE  emissive_colors[vary_texture_index].rgb
+#else
 uniform float metallicFactor;
 uniform float roughnessFactor;
 uniform vec3 emissiveColor;
+#define PBR_METALLIC  metallicFactor
+#define PBR_ROUGHNESS roughnessFactor
+#define PBR_EMISSIVE  emissiveColor
+#ifdef HAS_ALPHA_MASK
+uniform float minimum_alpha;
+#define PBR_MIN_ALPHA minimum_alpha
+#endif
+#endif
 
 #if defined(HAS_SUN_SHADOW) || defined(HAS_SSAO)
 uniform sampler2D lightMap;
@@ -66,10 +90,6 @@ in vec3 vary_normal;
 in vec3 vary_tangent;
 flat in float vary_sign;
 
-
-#ifdef HAS_ALPHA_MASK
-uniform float minimum_alpha; // PBR alphaMode: MASK, See: mAlphaCutoff, setAlphaCutoff()
-#endif
 
 // Lights
 // See: LLRender::syncLightState()
@@ -134,10 +154,14 @@ void main()
 
     waterClip(pos);
 
-    vec4 basecolor = texture(diffuseMap, base_color_texcoord.xy).rgba;
+#ifdef HAS_DIFFUSE_LOOKUP
+    vec4 basecolor = diffuseLookup(base_color_texcoord.xy);
+#else
+    vec4 basecolor = texture(diffuseMap, base_color_texcoord.xy);
+#endif
     basecolor.rgb = srgb_to_linear(basecolor.rgb);
 #ifdef HAS_ALPHA_MASK
-    if (basecolor.a < minimum_alpha)
+    if (basecolor.a < PBR_MIN_ALPHA)
     {
         discard;
     }
@@ -145,7 +169,11 @@ void main()
 
     vec3 col = vertex_color.rgb * basecolor.rgb;
 
+#ifdef HAS_NORMAL_LOOKUP
+    vec3 vNt = normalLookup(normal_texcoord.xy).xyz*2.0-1.0;
+#else
     vec3 vNt = texture(bumpMap, normal_texcoord.xy).xyz*2.0-1.0;
+#endif
     float sign = vary_sign;
     vec3 vN = vary_normal;
     vec3 vT = vary_tangent.xyz;
@@ -171,16 +199,24 @@ void main()
     scol = sampleDirectionalShadow(pos.xyz, norm.xyz, frag);
 #endif
 
+#ifdef HAS_SPECULAR_LOOKUP
+    vec3 orm = specularLookup(metallic_roughness_texcoord.xy).rgb;
+#else
     vec3 orm = texture(specularMap, metallic_roughness_texcoord.xy).rgb; //orm is packed into "emissiveRect" to keep the data in linear color space
+#endif
 
-    float perceptualRoughness = orm.g * roughnessFactor;
-    float metallic = orm.b * metallicFactor;
+    float perceptualRoughness = orm.g * PBR_ROUGHNESS;
+    float metallic = orm.b * PBR_METALLIC;
     float ao = orm.r;
 
     // emissiveColor is the emissive color factor from GLTF and is already in linear space
-    vec3 colorEmissive = emissiveColor;
+    vec3 colorEmissive = PBR_EMISSIVE;
+#ifdef HAS_EMISSIVE_LOOKUP
+    colorEmissive *= srgb_to_linear(emissiveLookup(emissive_texcoord.xy).rgb);
+#else
     // emissiveMap here is a vanilla RGB texture encoded as sRGB, manually convert to linear
     colorEmissive *= srgb_to_linear(texture(emissiveMap, emissive_texcoord.xy).rgb);
+#endif
 
     // PBR IBL
     float gloss      = 1.0 - perceptualRoughness;

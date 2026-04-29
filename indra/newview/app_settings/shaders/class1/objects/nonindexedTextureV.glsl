@@ -28,4 +28,9 @@ void passTextureIndex()
 
 }
 
+int getTextureIndex()
+{
+    return 0;
+}
+
 

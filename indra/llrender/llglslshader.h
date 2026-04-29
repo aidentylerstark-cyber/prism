@@ -37,6 +37,9 @@ class LLShaderFeatures
 {
 public:
     S32 mIndexedTextureChannels = 0;
+    S32 mIndexedNormalChannels = 0;
+    S32 mIndexedSpecularChannels = 0;
+    S32 mIndexedEmissiveChannels = 0;
     bool calculatesLighting = false;
     bool calculatesAtmospherics = false;
     bool hasLighting = false; // implies no transport (it's possible to have neither though)

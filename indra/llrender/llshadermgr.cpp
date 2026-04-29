@@ -453,7 +453,7 @@ void LLShaderMgr::dumpObjectLog(GLuint ret, bool warns, const std::string& filen
     }
  }
 
-GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_level, GLenum type, std::map<std::string, std::string>* defines, S32 texture_index_channels)
+GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_level, GLenum type, std::map<std::string, std::string>* defines, S32 texture_index_channels, S32 normal_index_channels, S32 specular_index_channels, S32 emissive_index_channels)
 {
 
 // endsure work-around for missing GLSL funcs gets propogated to feature shader files (e.g. srgbF.glsl)
@@ -647,98 +647,105 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         extra_code_text[extra_code_count++] = strdup( "#define IS_AMD_CARD 1\n" );
     }
 
-    if (texture_index_channels > 0 && type == GL_FRAGMENT_SHADER)
+    // --- Generalized indexed-texture lookup injection ------------------------
+    //
+    // Emits one `<fn_name>(vec2 uv)` function per enabled channel type, backed by
+    // an array of N samplers (`<prefix>0..<prefix>N-1`). Each channel declares
+    // its own HAS_<MACRO> define (in both vertex and fragment stages) so shader
+    // source can switch between scalar-uniform and indexed-array addressing.
+    // All channels share `vary_texture_index` and `texture_index`.
     {
-        //use specified number of texture channels for indexed texture rendering
-
-        /* prepend shader code that looks like this:
-
-        uniform sampler2D tex0;
-        uniform sampler2D tex1;
-        uniform sampler2D tex2;
-        .
-        .
-        .
-        uniform sampler2D texN;
-
-        flat in int vary_texture_index;
-
-        vec4 ret = vec4(1,0,1,1);
-
-        vec4 diffuseLookup(vec2 texcoord)
+        struct IndexedChannel
         {
-            switch (vary_texture_index)
-            {
-                case 0: ret = texture(tex0, texcoord); break;
-                case 1: ret = texture(tex1, texcoord); break;
-                case 2: ret = texture(tex2, texcoord); break;
-                .
-                .
-                .
-                case N: return texture(texN, texcoord); break;
-            }
+            S32         count;
+            const char* prefix;
+            const char* fn_name;
+            const char* macro;
+        };
 
-            return ret;
-        }
-        */
+        const IndexedChannel channels[] = {
+            { texture_index_channels,  "tex",  "diffuseLookup",  "HAS_DIFFUSE_LOOKUP"  },
+            { normal_index_channels,   "norm", "normalLookup",   "HAS_NORMAL_LOOKUP"   },
+            { specular_index_channels, "spec", "specularLookup", "HAS_SPECULAR_LOOKUP" },
+            { emissive_index_channels, "emis", "emissiveLookup", "HAS_EMISSIVE_LOOKUP" },
+        };
 
-        extra_code_text[extra_code_count++] = strdup("#define HAS_DIFFUSE_LOOKUP\n");
-
-        //uniform declartion
-        for (S32 i = 0; i < texture_index_channels; ++i)
+        bool any_channel = false;
+        bool any_multi   = false;
+        for (const auto& c : channels)
         {
-            std::string decl = llformat("uniform sampler2D tex%d;\n", i);
-            extra_code_text[extra_code_count++] = strdup(decl.c_str());
+            if (c.count > 0) any_channel = true;
+            if (c.count > 1) any_multi   = true;
         }
 
-        if (texture_index_channels > 1)
+        if (any_channel && !(major_version > 1 || minor_version >= 30))
         {
-            extra_code_text[extra_code_count++] = strdup("flat in int vary_texture_index;\n");
-        }
-
-        extra_code_text[extra_code_count++] = strdup("vec4 diffuseLookup(vec2 texcoord)\n");
-        extra_code_text[extra_code_count++] = strdup("{\n");
-
-
-        if (texture_index_channels == 1)
-        { //don't use flow control, that's silly
-            extra_code_text[extra_code_count++] = strdup("return texture(tex0, texcoord);\n");
-            extra_code_text[extra_code_count++] = strdup("}\n");
-        }
-        else if (major_version > 1 || minor_version >= 30)
-        {  //switches are supported in GLSL 1.30 and later
-            if (gGLManager.mIsNVIDIA)
-            { //switches are unreliable on some NVIDIA drivers
-                for (S32 i = 0; i < texture_index_channels; ++i)
-                {
-                    std::string if_string = llformat("\t%sif (vary_texture_index == %d) { return texture(tex%d, texcoord); }\n", i > 0 ? "else " : "", i, i);
-                    extra_code_text[extra_code_count++] = strdup(if_string.c_str());
-                }
-                extra_code_text[extra_code_count++] = strdup("\treturn vec4(1,0,1,1);\n");
-                extra_code_text[extra_code_count++] = strdup("}\n");
-            }
-            else
-            {
-                extra_code_text[extra_code_count++] = strdup("\tvec4 ret = vec4(1,0,1,1);\n");
-                extra_code_text[extra_code_count++] = strdup("\tswitch (vary_texture_index)\n");
-                extra_code_text[extra_code_count++] = strdup("\t{\n");
-
-                //switch body
-                for (S32 i = 0; i < texture_index_channels; ++i)
-                {
-                    std::string case_str = llformat("\t\tcase %d: return texture(tex%d, texcoord);\n", i, i);
-                    extra_code_text[extra_code_count++] = strdup(case_str.c_str());
-                }
-
-                extra_code_text[extra_code_count++] = strdup("\t}\n");
-                extra_code_text[extra_code_count++] = strdup("\treturn ret;\n");
-                extra_code_text[extra_code_count++] = strdup("}\n");
-            }
-        }
-        else
-        { //should never get here.  Indexed texture rendering requires GLSL 1.30 or later
-            // (for passing integers between vertex and fragment shaders)
             LL_ERRS() << "Indexed texture rendering requires GLSL 1.30 or later." << LL_ENDL;
+        }
+
+        // Emit the HAS_*_LOOKUP defines in both stages so the vertex shader can
+        // switch its uniforms (texture transforms, per-slot arrays) in lockstep.
+        for (const auto& c : channels)
+        {
+            if (c.count > 0)
+            {
+                std::string define = llformat("#define %s\n", c.macro);
+                extra_code_text[extra_code_count++] = strdup(define.c_str());
+            }
+        }
+
+        if (type == GL_FRAGMENT_SHADER)
+        {
+            if (any_multi)
+            {
+                extra_code_text[extra_code_count++] = strdup("flat in int vary_texture_index;\n");
+            }
+
+            for (const auto& c : channels)
+            {
+                if (c.count <= 0)
+                {
+                    continue;
+                }
+
+                for (S32 i = 0; i < c.count; ++i)
+                {
+                    std::string decl = llformat("uniform sampler2D %s%d;\n", c.prefix, i);
+                    extra_code_text[extra_code_count++] = strdup(decl.c_str());
+                }
+
+                std::string fn_open = llformat("vec4 %s(vec2 texcoord)\n{\n", c.fn_name);
+                extra_code_text[extra_code_count++] = strdup(fn_open.c_str());
+
+                if (c.count == 1)
+                {
+                    std::string body = llformat("return texture(%s0, texcoord);\n}\n", c.prefix);
+                    extra_code_text[extra_code_count++] = strdup(body.c_str());
+                }
+                else if (gGLManager.mIsNVIDIA)
+                { // switches are unreliable on some NVIDIA drivers
+                    for (S32 i = 0; i < c.count; ++i)
+                    {
+                        std::string if_string = llformat(
+                            "\t%sif (vary_texture_index == %d) { return texture(%s%d, texcoord); }\n",
+                            i > 0 ? "else " : "", i, c.prefix, i);
+                        extra_code_text[extra_code_count++] = strdup(if_string.c_str());
+                    }
+                    extra_code_text[extra_code_count++] = strdup("\treturn vec4(1,0,1,1);\n}\n");
+                }
+                else
+                {
+                    extra_code_text[extra_code_count++] = strdup("\tvec4 ret = vec4(1,0,1,1);\n");
+                    extra_code_text[extra_code_count++] = strdup("\tswitch (vary_texture_index)\n\t{\n");
+                    for (S32 i = 0; i < c.count; ++i)
+                    {
+                        std::string case_str = llformat(
+                            "\t\tcase %d: return texture(%s%d, texcoord);\n", i, c.prefix, i);
+                        extra_code_text[extra_code_count++] = strdup(case_str.c_str());
+                    }
+                    extra_code_text[extra_code_count++] = strdup("\t}\n\treturn ret;\n}\n");
+                }
+            }
         }
     }
 
@@ -939,7 +946,7 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         if (shader_level > 1)
         {
             shader_level--;
-            return loadShaderFile(filename, shader_level, type, defines, texture_index_channels);
+            return loadShaderFile(filename, shader_level, type, defines, texture_index_channels, normal_index_channels, specular_index_channels, emissive_index_channels);
         }
         LL_WARNS("ShaderLoading") << "Failed to load " << filename << LL_ENDL;
     }
@@ -1552,6 +1559,38 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("areaTex");
     mReservedUniforms.push_back("searchTex");
     mReservedUniforms.push_back("blendTex");
+
+    // Indexed-texture batching samplers. Must appear in the same order as the
+    // INDEXED_TEXTURE_*/INDEXED_NORMAL_*/... enum entries in llshadermgr.h so
+    // that `mTexture[INDEXED_TEXTURE_0 + slot]` etc. resolves correctly.
+    mReservedUniforms.push_back("tex0");
+    mReservedUniforms.push_back("tex1");
+    mReservedUniforms.push_back("tex2");
+    mReservedUniforms.push_back("tex3");
+    mReservedUniforms.push_back("norm0");
+    mReservedUniforms.push_back("norm1");
+    mReservedUniforms.push_back("norm2");
+    mReservedUniforms.push_back("norm3");
+    mReservedUniforms.push_back("spec0");
+    mReservedUniforms.push_back("spec1");
+    mReservedUniforms.push_back("spec2");
+    mReservedUniforms.push_back("spec3");
+    mReservedUniforms.push_back("emis0");
+    mReservedUniforms.push_back("emis1");
+    mReservedUniforms.push_back("emis2");
+    mReservedUniforms.push_back("emis3");
+
+    // Per-slot material parameter arrays (see INDEXED_*_COLORS /
+    // INDEXED_*_TRANSFORMS in llshadermgr.h). Must be in the same order as
+    // the corresponding enum entries.
+    mReservedUniforms.push_back("specular_colors");
+    mReservedUniforms.push_back("material_params");
+    mReservedUniforms.push_back("pbr_factors");
+    mReservedUniforms.push_back("emissive_colors");
+    mReservedUniforms.push_back("texture_base_color_transforms");
+    mReservedUniforms.push_back("texture_normal_transforms");
+    mReservedUniforms.push_back("texture_metallic_roughness_transforms");
+    mReservedUniforms.push_back("texture_emissive_transforms");
 
     llassert(mReservedUniforms.size() == END_RESERVED_UNIFORMS);
 

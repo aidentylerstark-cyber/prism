@@ -44,10 +44,19 @@ uniform mat4 modelview_matrix;
 
 out vec3 vary_position;
 
+#ifdef HAS_DIFFUSE_LOOKUP
+// texture_index is declared in indexedTextureV.glsl and exposed via
+// getTextureIndex() so we don't redeclare the vertex attribute here.
+uniform vec4 texture_base_color_transforms[8];
+uniform vec4 texture_normal_transforms[8];
+uniform vec4 texture_metallic_roughness_transforms[8];
+uniform vec4 texture_emissive_transforms[8];
+#else
 uniform vec4[2] texture_base_color_transform;
 uniform vec4[2] texture_normal_transform;
 uniform vec4[2] texture_metallic_roughness_transform;
 uniform vec4[2] texture_emissive_transform;
+#endif
 
 out vec3 vary_fragcoord;
 
@@ -71,9 +80,22 @@ out vec3 vary_normal;
 vec2 texture_transform(vec2 vertex_texcoord, vec4[2] khr_gltf_transform, mat4 sl_animation_transform);
 vec4 tangent_space_transform(vec4 vertex_tangent, vec3 vertex_normal, vec4[2] khr_gltf_transform, mat4 sl_animation_transform);
 
+void passTextureIndex();
+int  getTextureIndex();
+
+#ifdef HAS_DIFFUSE_LOOKUP
+vec4[2] indexed_transform(vec4 packed[8], int slot)
+{
+    int base = slot * 2;
+    return vec4[2](packed[base], packed[base + 1]);
+}
+#endif
+
 
 void main()
 {
+    passTextureIndex();
+
 #ifdef HAS_SKIN
     mat4 mat = getObjectSkinnedTransform();
     mat = modelview_matrix * mat;
@@ -88,10 +110,23 @@ void main()
 
     vary_fragcoord.xyz = vert.xyz;
 
-    base_color_texcoord = texture_transform(texcoord0, texture_base_color_transform, texture_matrix0);
-    normal_texcoord = texture_transform(texcoord0, texture_normal_transform, texture_matrix0);
-    metallic_roughness_texcoord = texture_transform(texcoord0, texture_metallic_roughness_transform, texture_matrix0);
-    emissive_texcoord = texture_transform(texcoord0, texture_emissive_transform, texture_matrix0);
+#ifdef HAS_DIFFUSE_LOOKUP
+    int ti = getTextureIndex();
+    vec4[2] bc_xform = indexed_transform(texture_base_color_transforms,         ti);
+    vec4[2] n_xform  = indexed_transform(texture_normal_transforms,             ti);
+    vec4[2] mr_xform = indexed_transform(texture_metallic_roughness_transforms, ti);
+    vec4[2] e_xform  = indexed_transform(texture_emissive_transforms,           ti);
+#else
+    vec4[2] bc_xform = texture_base_color_transform;
+    vec4[2] n_xform  = texture_normal_transform;
+    vec4[2] mr_xform = texture_metallic_roughness_transform;
+    vec4[2] e_xform  = texture_emissive_transform;
+#endif
+
+    base_color_texcoord         = texture_transform(texcoord0, bc_xform, texture_matrix0);
+    normal_texcoord             = texture_transform(texcoord0, n_xform,  texture_matrix0);
+    metallic_roughness_texcoord = texture_transform(texcoord0, mr_xform, texture_matrix0);
+    emissive_texcoord           = texture_transform(texcoord0, e_xform,  texture_matrix0);
 
 #ifdef HAS_SKIN
     vec3 n = (mat*vec4(normal.xyz+position.xyz,1.0)).xyz-pos.xyz;
@@ -103,7 +138,7 @@ void main()
 
     n = normalize(n);
 
-    vec4 transformed_tangent = tangent_space_transform(vec4(t, tangent.w), n, texture_normal_transform, texture_matrix0);
+    vec4 transformed_tangent = tangent_space_transform(vec4(t, tangent.w), n, n_xform, texture_matrix0);
     vary_tangent = normalize(transformed_tangent.xyz);
     vary_sign = transformed_tangent.w;
     vary_normal = n;

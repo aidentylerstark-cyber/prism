@@ -1286,6 +1286,21 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             gDeferredMaterialProgram[i].mShaderFiles.clear();
             gDeferredMaterialProgram[i].mShaderFiles.push_back(make_pair("deferred/materialV.glsl", GL_VERTEX_SHADER));
             gDeferredMaterialProgram[i].mShaderFiles.push_back(make_pair("deferred/materialF.glsl", GL_FRAGMENT_SHADER));
+            // Blinn-Phong material batching is capped at 2 slots per group on
+            // the non-BLEND variants (opaque / mask / emissive). BLEND
+            // variants (alpha_mode == 1) intentionally STAY on the scalar
+            // sampler path — the forward-lit BLEND shader samples lightFunc
+            // and other reserved samplers during its own lighting calc, and
+            // the indexed-sampler pin-and-shift interacts badly with those
+            // reads. can_batch_texture() in llvovolume.cpp pairs with this by
+            // rejecting BP-alpha faces so nothing registers per-slot data for
+            // these shader variants.
+            if (alpha_mode != 1 /* DIFFUSE_ALPHA_MODE_BLEND */)
+            {
+                gDeferredMaterialProgram[i].mFeatures.mIndexedTextureChannels  = 2;
+                gDeferredMaterialProgram[i].mFeatures.mIndexedNormalChannels   = 2;
+                gDeferredMaterialProgram[i].mFeatures.mIndexedSpecularChannels = 2;
+            }
             gDeferredMaterialProgram[i].mShaderLevel = mShaderLevel[SHADER_DEFERRED];
 
             gDeferredMaterialProgram[i].clearPermutations();
@@ -1357,6 +1372,16 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gDeferredPBROpaqueProgram.mShaderFiles.clear();
         gDeferredPBROpaqueProgram.mShaderFiles.push_back(make_pair("deferred/pbropaqueV.glsl", GL_VERTEX_SHADER));
         gDeferredPBROpaqueProgram.mShaderFiles.push_back(make_pair("deferred/pbropaqueF.glsl", GL_FRAGMENT_SHADER));
+        // PBR indexed-batch cap: four groups × sIndexedTextureChannels(=4) =
+        // 16 samplers on its own, and once reserved samplers (reflectionProbes,
+        // irradianceProbes, brdfLut, exposureMap, etc.) stack on top the
+        // program exceeds GL's 16 fragment image unit minimum. Cap each PBR
+        // group at 2 slots (8 indexed samplers total). genDrawInfo enforces
+        // the matching face-side slot cap for PBR faces.
+        gDeferredPBROpaqueProgram.mFeatures.mIndexedTextureChannels  = 2;
+        gDeferredPBROpaqueProgram.mFeatures.mIndexedNormalChannels   = 2;
+        gDeferredPBROpaqueProgram.mFeatures.mIndexedSpecularChannels = 2;
+        gDeferredPBROpaqueProgram.mFeatures.mIndexedEmissiveChannels = 2;
         gDeferredPBROpaqueProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
         gDeferredPBROpaqueProgram.clearPermutations();
 
@@ -1454,6 +1479,14 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         shader->mShaderFiles.clear();
         shader->mShaderFiles.push_back(make_pair("deferred/pbralphaV.glsl", GL_VERTEX_SHADER));
         shader->mShaderFiles.push_back(make_pair("deferred/pbralphaF.glsl", GL_FRAGMENT_SHADER));
+        // See the gDeferredPBROpaqueProgram cap above. Same sampler-count
+        // concern applies to the alpha variant; additionally the alpha path
+        // consumes more reserved units via shadow sampling + dynamic light
+        // uniforms, so staying at 2 slots per group is a must.
+        shader->mFeatures.mIndexedTextureChannels  = 2;
+        shader->mFeatures.mIndexedNormalChannels   = 2;
+        shader->mFeatures.mIndexedSpecularChannels = 2;
+        shader->mFeatures.mIndexedEmissiveChannels = 2;
 
         shader->clearPermutations();
 

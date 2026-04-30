@@ -119,6 +119,7 @@ private:
     std::vector<std::string> mPickedFiles;
     VolumeCatcher mVolumeCatcher;
     F32 mCurVolume;
+    bool mPixelsDirty;
     dullahan* mCEFLib;
 };
 
@@ -159,6 +160,7 @@ MediaPluginBase(host_send_func, host_user_data)
     mCefLogVerbose = false;
     mPickedFiles.clear();
     mCurVolume = 0.0;
+    mPixelsDirty = false;
 
     mCEFLib = new dullahan();
 
@@ -197,7 +199,8 @@ void MediaPluginCEF::onPageChangedCallback(const unsigned char* pixels, int x, i
         if (mWidth == width && mHeight == height)
         {
             memcpy(mPixels, pixels, mWidth * mHeight * mDepth);
-            setDirty(0, 0, mWidth, mHeight);
+            // Defer call to setDirty + assume the full image is dirty
+            mPixelsDirty = true;
         }
         else
         {
@@ -556,6 +559,12 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
             else if (message_name == "idle")
             {
                 mCEFLib->update();
+
+                if (mPixelsDirty)
+                {
+                    mPixelsDirty = false;
+                    setDirty(0, 0, mWidth, mHeight);
+                }
 
                 mVolumeCatcher.pump();
 

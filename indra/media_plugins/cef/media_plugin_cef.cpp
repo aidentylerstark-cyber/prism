@@ -197,12 +197,12 @@ void MediaPluginCEF::onPageChangedCallback(const unsigned char* pixels, int x, i
         if (mWidth == width && mHeight == height)
         {
             memcpy(mPixels, pixels, mWidth * mHeight * mDepth);
+            setDirty(0, 0, mWidth, mHeight);
         }
         else
         {
             mCEFLib->setSize(mWidth, mHeight);
         }
-        setDirty(0, 0, mWidth, mHeight);
     }
 }
 

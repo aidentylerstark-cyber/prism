@@ -253,32 +253,6 @@ const std::string& LLView::getName() const
     return mName.empty() ? no_name : mName;
 }
 
-void LLView::setName(const std::string& name)
-{
-    if (name == mName)
-    {
-        return;
-    }
-
-    LLView* parent = mParentView;
-
-    if (parent && !mName.empty())
-    {
-        auto it = parent->mChildNameCache.find(mName);
-        if (it != parent->mChildNameCache.end() && it->second == this)
-        {
-            parent->mChildNameCache.erase(it);
-        }
-    }
-
-    mName = name;
-
-    if (parent && !mName.empty())
-    {
-        parent->mChildNameCache[mName] = this;
-    }
-}
-
 void LLView::sendChildToFront(LLView* child)
 {
 //  llassert_always(sDepth == 0); // Avoid re-ordering while drawing; it can cause subtle iterator bugs
@@ -331,12 +305,6 @@ bool LLView::addChild(LLView* child, S32 tab_group)
     // add to front of child list, as normal
     mChildList.push_front(child);
 
-    // Add to name cache for fast lookup
-    if (child->hasName())
-    {
-        mChildNameCache[child->getName()] = child;
-    }
-
     // add to tab order list
     if (tab_group != 0)
     {
@@ -376,17 +344,6 @@ void LLView::removeChild(LLView* child)
         // if we are removing an item we are currently iterating over, that would be bad
         llassert(!child->mInDraw);
         mChildList.remove( child );
-
-        // Remove from name cache - verify pointer to handle duplicate names
-        if (child->hasName())
-        {
-            auto it = mChildNameCache.find(child->getName());
-            if (it != mChildNameCache.end() && it->second == child)
-            {
-                mChildNameCache.erase(it);
-            }
-        }
-
         child->mParentView = NULL;
         child_tab_order_t::iterator found = mTabOrder.find(child);
         if (found != mTabOrder.end())
@@ -1692,40 +1649,15 @@ LLView* LLView::findChildView(std::string_view name, bool recurse) const
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
 
-    // Check cache first for direct children - O(1) lookup instead of O(n)
-    if (!mChildNameCache.empty())
-    {
-        std::string lookup_key(name);
-        auto cache_it = mChildNameCache.find(lookup_key);
-        if (cache_it != mChildNameCache.end())
-        {
-            return cache_it->second;
-        }
-    }
-
     // Look for direct children *first*
     for (LLView* childp : mChildList)
     {
         llassert(childp);
-        const std::string& child_name = childp->getName();
-
-        if (child_name.empty())
+        if (childp->getName() == name)
         {
-            if (name.empty())
-            {
-                return childp;
-            }
-            continue;
-        }
-
-        if (child_name == name)
-        {
-            // Cache the result for next lookup
-            mChildNameCache[child_name] = childp;
             return childp;
         }
     }
-
     if (recurse)
     {
         // Look inside each child as well.

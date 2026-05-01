@@ -50,7 +50,6 @@
 
 #include <functional>
 #include <list>
-#include <unordered_map>
 
 class LLSD;
 
@@ -237,8 +236,7 @@ public:
     void        setFollowsAll()                 { mReshapeFlags |= FOLLOWS_ALL; }
 
     void        setSoundFlags(U8 flags)         { mSoundFlags = flags; }
-    void        setName(const std::string& name);
-    bool        hasName() const                     { return !mName.empty(); }
+    void        setName(std::string name)           { mName = name; }
     void        setUseBoundingRect( bool use_bounding_rect );
     bool        getUseBoundingRect() const;
 
@@ -589,9 +587,6 @@ private:
 
     LLView*     mParentView;
     child_list_t mChildList;
-
-    // Cache for fast child lookup by name - O(1) instead of O(n)
-    mutable std::unordered_map<std::string, LLView*> mChildNameCache;
 
     // location in pixels, relative to surrounding structure, bottom,left=0,0
     bool        mVisible;

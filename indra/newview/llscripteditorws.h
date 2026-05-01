@@ -162,6 +162,11 @@ public:
     virtual ~LLScriptEditorWSServer() = default;
 
     static LLScriptEditorWSServer::ptr_t getServer();
+    static LLScriptEditorWSServer::ptr_t ensureServerRunning();
+    static std::string                   buildVSCodeURI(const LLUUID& object_id = LLUUID::null,
+                                                        const LLUUID& script_id = LLUUID::null);
+    static bool                          launchVSCode(const LLUUID& object_id = LLUUID::null,
+                                                      const LLUUID& script_id = LLUUID::null);
 
     void onStarted() override;
     void onStopped() override;

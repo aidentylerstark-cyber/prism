@@ -1152,10 +1152,34 @@ void LLScriptEdCore::openInExternalEditor()
         mContainer->mLiveFile = new LLLiveLSLFile(filename, boost::bind(&LLScriptEdContainer::onExternalChange, mContainer, _1));
         mContainer->mLiveFile->addToEventTimer();
     }
-    mContainer->startWebsocketServer();
-
-    // Open it in external editor.
+    if (gSavedSettings.getBOOL("ExternalEditorTightIntegration"))
     {
+        // VS Code tight integration path
+        auto server = LLScriptEditorWSServer::ensureServerRunning();
+        if (server)
+        {
+            std::string script_id_hash_str(mContainer->getUniqueHash());
+            server->subscribeScriptEditor(mContainer->mObjectUUID, mContainer->mItemUUID,
+                mScriptName, mContainer->getHandle(), script_id_hash_str);
+            mContainer->mWebSocketServer = server;
+
+            if (!LLScriptEditorWSServer::launchVSCode())
+            {
+                LLNotificationsUtil::add("GenericAlert",
+                    LLSD().with("MESSAGE", LLTrans::getString("VSCodeLaunchFailed")));
+            }
+        }
+        else
+        {
+            LLNotificationsUtil::add("GenericAlert",
+                LLSD().with("MESSAGE", LLTrans::getString("ExternalEditorFailedToStart")));
+        }
+    }
+    else
+    {
+        // Legacy external editor path
+        mContainer->startWebsocketServer();
+
         LLExternalEditor ed;
         LLExternalEditor::EErrorCode status;
         std::string msg;
@@ -1680,38 +1704,15 @@ bool LLScriptEdContainer::handleKeyHere(KEY key, MASK mask)
 
 void LLScriptEdContainer::startWebsocketServer()
 {
-    if (gSavedSettings.getBOOL("ExternalWebsocketSyncEnable"))
+    auto server = LLScriptEditorWSServer::ensureServerRunning();
+    if (!server)
     {
-        // Attempt to find an existing server
-        LLWebsocketMgr&               wsmgr  = LLWebsocketMgr::instance();
-        LLScriptEditorWSServer::ptr_t server =
-            std::static_pointer_cast<LLScriptEditorWSServer>(
-                wsmgr.findServerByName(LLScriptEditorWSServer::DEFAULT_SERVER_NAME));
-
-        if (!server)
-        {   // We couldn't find one, so create it
-            U16 server_port = static_cast<U16>(gSavedSettings.getS32("ExternalWebsocketSyncPort"));
-            bool server_localhost = gSavedSettings.getBOOL("ExternalWebsocketSyncLocal");
-            server = std::make_shared<LLScriptEditorWSServer>(LLScriptEditorWSServer::DEFAULT_SERVER_NAME, server_port, server_localhost);
-            wsmgr.addServer(server);
-        }
-
-        bool is_running = server->isRunning();
-        if (!is_running)
-        {   // Server isn't running, so start it
-            is_running = wsmgr.startServer(LLScriptEditorWSServer::DEFAULT_SERVER_NAME);
-        }
-
-        if (!is_running && !server->isRunning())
-        {   // Failed to start the server
-            LL_WARNS() << "Failed to start script editor websocket server" << LL_ENDL;
-            return;
-        }
-
-        std::string script_id_hash_str(getUniqueHash());
-        server->subscribeScriptEditor(mObjectUUID, mItemUUID, mScriptEd->mScriptName, getHandle(), script_id_hash_str);
-        mWebSocketServer = server;
+        return;
     }
+
+    std::string script_id_hash_str(getUniqueHash());
+    server->subscribeScriptEditor(mObjectUUID, mItemUUID, mScriptEd->mScriptName, getHandle(), script_id_hash_str);
+    mWebSocketServer = server;
 }
 
 void LLScriptEdContainer::unsubscribeScript()

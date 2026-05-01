@@ -41,6 +41,8 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llchat.h"
+#include "llviewercontrol.h"
+#include "llprocess.h"
 
 //========================================================================
 LLScriptEditorWSServer::LLScriptEditorWSServer(const std::string& name, U16 port, bool local_only)
@@ -59,6 +61,98 @@ LLScriptEditorWSServer::ptr_t LLScriptEditorWSServer::getServer()
     LLWebsocketMgr&               wsmgr  = LLWebsocketMgr::instance();
     return std::static_pointer_cast<LLScriptEditorWSServer>(
             wsmgr.findServerByName(LLScriptEditorWSServer::DEFAULT_SERVER_NAME));
+}
+
+LLScriptEditorWSServer::ptr_t LLScriptEditorWSServer::ensureServerRunning()
+{
+    if (!gSavedSettings.getBOOL("ExternalWebsocketSyncEnable"))
+    {
+        LL_DEBUGS("ScriptEditorWS") << "WebSocket server is disabled by ExternalWebsocketSyncEnable" << LL_ENDL;
+        return nullptr;
+    }
+
+    LLWebsocketMgr& wsmgr = LLWebsocketMgr::instance();
+    ptr_t server = std::static_pointer_cast<LLScriptEditorWSServer>(
+        wsmgr.findServerByName(DEFAULT_SERVER_NAME));
+
+    if (!server)
+    {
+        U16  port       = static_cast<U16>(gSavedSettings.getS32("ExternalWebsocketSyncPort"));
+        bool local_only = gSavedSettings.getBOOL("ExternalWebsocketSyncLocal");
+        server = std::make_shared<LLScriptEditorWSServer>(DEFAULT_SERVER_NAME, port, local_only);
+        wsmgr.addServer(server);
+    }
+
+    if (!server->isRunning())
+    {
+        if (!wsmgr.startServer(DEFAULT_SERVER_NAME))
+        {
+            LL_WARNS("ScriptEditorWS") << "Failed to start script editor websocket server" << LL_ENDL;
+            return nullptr;
+        }
+    }
+
+    return server;
+}
+
+std::string LLScriptEditorWSServer::buildVSCodeURI(const LLUUID& object_id,
+                                                    const LLUUID& script_id)
+{
+    std::ostringstream uri;
+    uri << "vscode://lindenlab.sl-vscode-plugin/connect";
+
+    U16 port = static_cast<U16>(gSavedSettings.getS32("ExternalWebsocketSyncPort"));
+    uri << "?port=" << port;
+
+    if (object_id.notNull())
+    {
+        uri << "&object=" << object_id.asString();
+    }
+
+    if (script_id.notNull())
+    {
+        uri << "&script=" << script_id.asString();
+    }
+
+    return uri.str();
+}
+
+bool LLScriptEditorWSServer::launchVSCode(const LLUUID& object_id,
+                                           const LLUUID& script_id)
+{
+    ptr_t server = ensureServerRunning();
+    if (!server)
+    {
+        LL_WARNS("ScriptEditorWS") << "Cannot launch VS Code: WebSocket server failed to start" << LL_ENDL;
+        return false;
+    }
+
+    std::string uri = buildVSCodeURI(object_id, script_id);
+
+    LLProcess::Params params;
+#if LL_WINDOWS
+    // On Windows, VS Code's 'code' is a batch file (.cmd) which APR cannot
+    // launch directly. Invoke it through cmd.exe instead.
+    params.executable = "cmd.exe";
+    params.args.add("/c");
+    params.args.add("code");
+#else
+    params.executable = "code";
+#endif
+    params.args.add("--open-url");
+    params.args.add(uri);
+    params.autokill = false;
+
+    LLProcessPtr process = LLProcess::create(params);
+    if (!process)
+    {
+        LL_WARNS("ScriptEditorWS") << "Failed to launch VS Code. "
+            << "Ensure the 'code' command is available on your PATH." << LL_ENDL;
+        return false;
+    }
+
+    LL_INFOS("ScriptEditorWS") << "Launched VS Code with URI: " << uri << LL_ENDL;
+    return true;
 }
 
 

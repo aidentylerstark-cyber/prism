@@ -441,6 +441,9 @@ void LLWebsocketMgr::WSServer::stop()
 
         mShouldStop = true;
 
+        // Send close frames to all connected clients before stopping the ASIO loop
+        closeAllConnections(1001, "Server shutting down");
+
         // Stop the websocket server (this will cause the controlled run loop to exit)
         mImpl->stop();
     } // Release the lock here
@@ -671,4 +674,27 @@ bool LLWebsocketMgr::WSConnection::isConnected() const
         return false;
     }
     return server->getConnectionState(mConnectionHandle) == connection_open;
+}
+
+LLWebsocketMgr::WSConnection::ptr_t LLWebsocketMgr::WSConnection::getSelfPtr()
+{
+    auto server = mOwningServer.lock();
+    if (!server) return nullptr;
+    return server->getConnection(mConnectionHandle);
+}
+
+void LLWebsocketMgr::WSServer::closeAllConnections(U16 code, const std::string& reason)
+{
+    std::vector<connection_h> handles;
+    {
+        LLMutexLock lock(&mConnectionMutex);
+        for (const auto& [handle, conn] : mConnections)
+        {
+            handles.push_back(handle);
+        }
+    }
+    for (const auto& handle : handles)
+    {
+        closeConnection(handle, code, reason);
+    }
 }

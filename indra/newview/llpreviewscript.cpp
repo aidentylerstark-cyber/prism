@@ -1163,7 +1163,11 @@ void LLScriptEdCore::openInExternalEditor()
                 mScriptName, mContainer->getHandle(), script_id_hash_str);
             mContainer->mWebSocketServer = server;
 
-            if (!LLScriptEditorWSServer::launchVSCode())
+            LLViewerObject* object      = gObjectList.findObject(mContainer->mObjectUUID);
+            LLViewerObject* root_object = object ? object->getRootEdit() : nullptr;
+            LLUUID          root_id     = root_object ? root_object->getID() : mContainer->mObjectUUID;
+
+            if (!LLScriptEditorWSServer::launchVSCode(root_id))
             {
                 LLNotificationsUtil::add("GenericAlert",
                     LLSD().with("MESSAGE", LLTrans::getString("VSCodeLaunchFailed")));

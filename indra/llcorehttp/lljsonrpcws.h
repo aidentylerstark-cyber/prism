@@ -250,6 +250,19 @@ public:
     void registerMethod(const std::string& method, MethodHandler handler);
 
     /**
+     * @brief Register an async method handler, executed in a coroutine
+     *
+     * Unlike registerMethod(), the handler runs inside an LLCoros coroutine
+     * and may use llcoro::suspendUntilEventOn* to wait for async results.
+     * The handler returns its result normally; the framework sends the
+     * JSON-RPC response automatically when the coroutine returns.
+     *
+     * @param method  The method name to register
+     * @param handler The coroutine-safe function to call
+     */
+    void registerAsyncMethod(const std::string& method, MethodHandler handler);
+
+    /**
      * @brief Unregister a method handler
      * @param method The method name to unregister
      */
@@ -338,6 +351,7 @@ protected:
 
 private:
     std::unordered_map<std::string, MethodHandler> mMethodHandlers;
+    std::unordered_map<std::string, MethodHandler> mAsyncMethodHandlers;
     std::unordered_map<std::string, ResponseCallback> mPendingRequests;
 };
 

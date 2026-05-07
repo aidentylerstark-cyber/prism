@@ -30,6 +30,8 @@
 #include "llerror.h"
 #include "llsdjson.h"
 #include "lldate.h"
+#include "llcoros.h"
+#include "llmainthreadtask.h"
 
 #include <boost/json.hpp>
 
@@ -153,7 +155,44 @@ void LLJSONRPCConnection::processRequest(const LLSD& request)
     LL_DEBUGS("JSONRPC") << "Processing " << (is_notification ? "notification" : "request")
                          << " for method: " << method << LL_ENDL;
 
-    // Find method handler
+    // Check async handlers first — launched as a coroutine, response sent by the lambda
+    auto async_it = mAsyncMethodHandlers.find(method);
+    if (async_it != mAsyncMethodHandlers.end())
+    {
+        if (is_notification)
+        {
+            LL_WARNS("JSONRPC") << "Async method " << method
+                                << " called as notification; ignoring" << LL_ENDL;
+            return;
+        }
+        ptr_t conn = std::static_pointer_cast<LLJSONRPCConnection>(getSelfPtr());
+        MethodHandler handler = async_it->second;
+        LLMainThreadTask::dispatch(
+            [handler, method, id, params, conn]()
+            {
+                LLCoros::instance().launch(
+                    "JSONRPC::" + method,
+                    [handler, method, id, params, conn]()
+                    {
+                        try
+                        {
+                            LLSD result = handler(method, id, params);
+                            conn->sendResponse(id, result);
+                        }
+                        catch (const RPCError& e)
+                        {
+                            conn->sendError(id, e);
+                        }
+                        catch (const std::exception& e)
+                        {
+                            conn->sendError(id, InternalError(e.what()));
+                        }
+                    });
+            });
+        return;
+    }
+
+    // Find sync method handler
     auto it = mMethodHandlers.find(method);
     if (it == mMethodHandlers.end())
     {
@@ -321,9 +360,16 @@ void LLJSONRPCConnection::registerMethod(const std::string& method, MethodHandle
     LL_DEBUGS("JSONRPC") << "Registered method: " << method << LL_ENDL;
 }
 
+void LLJSONRPCConnection::registerAsyncMethod(const std::string& method, MethodHandler handler)
+{
+    mAsyncMethodHandlers[method] = handler;
+    LL_DEBUGS("JSONRPC") << "Registered async method: " << method << LL_ENDL;
+}
+
 void LLJSONRPCConnection::unregisterMethod(const std::string& method)
 {
     mMethodHandlers.erase(method);
+    mAsyncMethodHandlers.erase(method);
     LL_DEBUGS("JSONRPC") << "Unregistered method: " << method << LL_ENDL;
 }
 

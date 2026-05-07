@@ -43,6 +43,8 @@ class LLScriptEdContainer;
 class LLScriptEditorWSServer;
 class LLChat;
 class LLPanel;
+class LLPublishedPrimListener;
+class LLViewerObject;
 
 class LLScriptEditorWSConnection : public LLJSONRPCConnection, public std::enable_shared_from_this<LLScriptEditorWSConnection>
 {
@@ -187,6 +189,14 @@ public:
 
     std::set<std::string> getActiveScripts() const;
 
+    // --- Object Content Publishing ---
+    bool publishObject(const LLUUID& object_id, U32 connection_id);
+    void unpublishObject(const LLUUID& object_id, const std::string& reason = "");
+    bool isObjectPublished(const LLUUID& object_id) const;
+    void unpublishConnection(U32 connection_id);
+    void onPrimInventoryReady(const LLUUID& object_id, const LLUUID& prim_id);
+    void onPrimInventoryChanged(const LLUUID& object_id, const LLUUID& prim_id);
+
 protected:
     LLWebsocketMgr::WSConnection::ptr_t connectionFactory(LLWebsocketMgr::WSServer::ptr_t server,
                                                          LLWebsocketMgr::connection_h handle) override;
@@ -202,6 +212,16 @@ protected:
     LLSD handleScriptSubscribe(U32 connection_id, const LLSD& params);
     LLSD handleScriptUnsubscribe(U32 connection_id, const LLSD& params);
     LLSD handleFileWatcherFileListRequest() const;
+    LLSD handleObjectRequest(U32 connection_id, const LLSD& params);
+    LLSD handleObjectContentGet(const std::string& method, const LLSD& id, const LLSD& params);
+    LLSD handleObjectContentSave(const std::string& method, const LLSD& id, const LLSD& params);
+
+    // --- Object Content Publishing (helpers) ---
+    LLSD buildPrimInventoryLLSD(LLViewerObject* object) const;
+    void notifyConnection(U32 connection_id, const std::string& method, const LLSD& params) const;
+    void cleanupPrimListeners(const LLUUID& object_id);
+    void buildAndSendPublish(const LLUUID& object_id);
+    static LLSD errorResponse(const std::string& message);
 
 private:
     struct EditorSubscription
@@ -221,11 +241,43 @@ private:
     };
     using subscriptions_t = std::unordered_map<std::string, EditorSubscription>;
 
+    struct PublishedPrimInfo
+    {
+        LLUUID      mPrimID;
+        std::string mPrimName;
+        S32         mLinkNumber;        // 1=root, >=2=child
+        S16         mInventorySerial;   // last-seen serial for change detection (Phase 4)
+    };
+
+    struct PublishedObjectInfo
+    {
+        LLUUID                                              mObjectID;      // root prim UUID
+        LLUUID                                              mOwnerID;
+        std::string                                         mObjectName;
+        std::string                                         mObjectDescription;
+        std::string                                         mRegionName;
+        U32                                                 mConnectionID;  // owning WS connection
+        LLScriptEditorWSConnection::wptr_t                  mConnection;
+        std::vector<PublishedPrimInfo>                       mPrims;         // root + all children
+        std::vector<std::unique_ptr<LLPublishedPrimListener>> mListeners;
+    };
+
+    struct PendingPublish
+    {
+        LLUUID                                              mObjectID;
+        U32                                                 mConnectionID;
+        std::set<LLUUID>                                    mPendingPrims;  // prims whose inventory we're still waiting for
+        std::vector<std::unique_ptr<LLPublishedPrimListener>> mListeners;   // listeners for pending prims
+    };
+
     SubscriptionError_t updateScriptSubscription(const std::string &script_id, U32 connection_id);
     void                unsubscribeConnection(U32 connection_id);
 
     subscriptions_t mSubscriptions;
     std::map<U32, LLScriptEditorWSConnection::wptr_t> mActiveConnections;
+
+    std::map<LLUUID, PublishedObjectInfo> mPublishedObjects;  // keyed by root object_id
+    std::map<LLUUID, PendingPublish>      mPendingPublishes;  // keyed by root object_id
 
     boost::signals2::connection mLanguageChangeSignal;
     LLUUID mLastSyntaxId;

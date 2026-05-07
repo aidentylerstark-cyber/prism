@@ -48,6 +48,7 @@
 #include "llmutelist.h"
 #include "llnotifications.h"
 #include "llnotificationsutil.h"
+#include "llstartup.h"
 #include "llavataractions.h"
 #include "llparcel.h"
 #include "llpluginclassmedia.h"
@@ -675,10 +676,11 @@ void LLViewerMedia::updateMedia(void *dummy_arg)
         return;
     }
 
-    // HACK: we always try to keep a spare running webkit plugin around to improve launch times.
-    // 2017-04-19 Removed CP - this doesn't appear to buy us much and consumes a lot of resources so
-    // removing it for now.
-    //createSpareBrowserMediaSource();
+    if (LLStartUp::getStartupState() <= STATE_LOGIN_WAIT)
+    {
+        // Keep a spare browser plugin process ready for login-screen web content.
+        createSpareBrowserMediaSource();
+    }
 
     mAnyMediaShowing = false;
     mAnyMediaPlaying = false;

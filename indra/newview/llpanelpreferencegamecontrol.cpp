@@ -352,6 +352,10 @@ void LLPanelPreferenceGameControl::applyGameControlInput()
         sSelectedCell->setValue(channel_label);
         sSelectedGrid->deselectAllItems();
         sGameControlPanel->clearSelectionState();
+
+        // WORKAROUND: to immediately apply changes we save to settings and then load them.
+        // TODO: provide a more direct way to apply changes to LLGameControl without writing to file,
+        // then we can call sGameControlPanel->saveSettings() just once in ::apply()
         sGameControlPanel->saveSettings();
         LLGameControl::loadFromSettings();
     }
@@ -812,6 +816,7 @@ void LLPanelPreferenceGameControl::populateOptionsTableRows()
     cell_params.font = LLFontGL::getFontMonospace();
     for (size_t i = 0; i < mAxisOptions->getNumColumns(); ++i)
     {
+        cell_params.column = mAxisOptions->getColumn(i)->mName;
         row_params.columns.add(cell_params);
     }
 
@@ -859,6 +864,7 @@ void LLPanelPreferenceGameControl::populateMappingTableRows(LLScrollListCtrl* ta
     cell_params.font = LLFontGL::getFontMonospace();
     for (size_t i = 0; i < target->getNumColumns(); ++i)
     {
+        cell_params.column = target->getColumn(i)->mName;
         row_params.columns.add(cell_params);
     }
 

@@ -63,6 +63,7 @@
 #include "llnotificationsutil.h"
 #include "llnotificationtemplate.h"
 #include "llpanellogin.h"
+#include "llpanelpreferencegamecontrol.h"
 #include "llpanelvoicedevicesettings.h"
 #include "llradiogroup.h"
 #include "llsearchcombobox.h"
@@ -3277,6 +3278,7 @@ void LLPanelPreferenceControls::onCancelKeyBind()
     pControlsTable->deselectAllItems();
 }
 
+#if 0
 //------------------------LLPanelPreferenceGameControl--------------------------------
 //
 // Preference panel for configuring game controller (gamepad) input.
@@ -4396,6 +4398,7 @@ void LLPanelPreferenceGameControl::rememberOriginalSettings()
         mOrigSettings.insert("KnownGameControllers", gSavedSettings.getLLSD("KnownGameControllers"));
     }
 }
+#endif // 0
 
 //------------------------LLFloaterPreferenceProxy--------------------------------
 

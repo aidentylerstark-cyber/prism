@@ -38,14 +38,23 @@ class LLPanel;
 class LLSpinCtrl;
 class LLTextBox;
 
+//------------------------LLPanelPreferenceGameControl--------------------------------
+//
 // Preference panel for configuring game controller (gamepad) input.
 //
-// Provides two main tabs:
-//   1. Channel Mappings - Maps viewer actions to controller inputs (axes/buttons)
-//   2. Device Settings  - Per-device configuration (axis options, remapping)
+// This panel provides two main tabs:
+//   1. Channel Mappings - Maps avatar actions (move forward, jump, etc.) to controller inputs
+//   2. Device Settings  - Per-device configuration including:
+//      - Axis Options:   Invert, deadzone, and offset for each axis
+//      - Axis Mappings:  Remap physical axes to different logical axes
+//      - Button Mappings: Remap physical buttons to different logical buttons
 //
-// Supports live input capture: pressing a controller input while editing
-// automatically assigns that input to the selected action.
+// Settings are stored in:
+//   - AnalogChannelMappings, BinaryChannelMappings, FlycamChannelMappings (action mappings)
+//   - KnownGameControllers (per-device options keyed by device GUID)
+//
+// The panel supports live input capture: when a combobox is open, pressing a controller
+// button or moving an axis will automatically select that input channel.
 //
 class LLPanelPreferenceGameControl : public LLPanelPreference
 {

@@ -814,7 +814,7 @@ void LLPanelPreferenceGameControl::populateAxisOptionsTableRows()
     LLScrollListItem::Params row_params;
     LLScrollListCell::Params cell_params;
     cell_params.font = LLFontGL::getFontMonospace();
-    for (size_t i = 0; i < mAxisOptions->getNumColumns(); ++i)
+    for (S32 i = 0; i < (S32)(mAxisOptions->getNumColumns()); ++i)
     {
         cell_params.column = mAxisOptions->getColumn(i)->mName;
         row_params.columns.add(cell_params);
@@ -862,7 +862,7 @@ void LLPanelPreferenceGameControl::populateMappingTableRows(LLScrollListCtrl* ta
     LLScrollListItem::Params row_params;
     LLScrollListCell::Params cell_params;
     cell_params.font = LLFontGL::getFontMonospace();
-    for (size_t i = 0; i < target->getNumColumns(); ++i)
+    for (S32 i = 0; i < target->getNumColumns(); ++i)
     {
         cell_params.column = target->getColumn(i)->mName;
         row_params.columns.add(cell_params);

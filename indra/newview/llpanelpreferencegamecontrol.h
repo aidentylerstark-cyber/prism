@@ -80,6 +80,12 @@ public:
     void cancel(const std::vector<std::string> settings_to_skip = {}) override;
     void saveSettings() override;
 
+    // Snapshots the panel's UI state as an LLSD map keyed by the same
+    // setting names LLGameControl uses (AnalogChannelMappings, etc.).
+    // The result can be fed to LLGameControl::applySettingsFromLLSD()
+    // to push pending changes into the runtime without touching gSavedSettings.
+    LLSD getSettingsAsLLSD();
+
     void updateDeviceListInternal(); // Refresh device list and settings
 
     // UI event handlers
@@ -104,8 +110,8 @@ protected:
     // Device settings population (Tab 2: Device Settings)
     void populateDeviceTitle();         // Update device selector UI
     void populateDeviceSettings(const std::string& guid);  // Load settings for device
-    void populateOptionsTableRows();    // Create axis options rows
-    void populateOptionsTableCells();   // Fill axis options with current values
+    void populateAxisOptionsTableRows();    // Create axis options rows
+    void populateAxisOptionsTableCells();   // Fill axis options with current values
     void populateMappingTableRows(LLScrollListCtrl* target,
         const LLComboBox* source, size_t row_count);  // Create mapping table rows
     void populateMappingTableCells(LLScrollListCtrl* target,

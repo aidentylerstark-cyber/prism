@@ -336,8 +336,8 @@ public:
     void getDefaultMappings(std::vector<std::pair<std::string, LLGameControl::InputChannel>>& mappings);
     void initializeMappingsByDefault();
     void resetDeviceOptionsToDefaults();
-    void loadDeviceOptionsFromSettings();
-    void saveDeviceOptionsToSettings() const;
+    void applyRememberedDeviceOptions();
+    void rememberDeviceOptions() const;
     void setDeviceOptions(const std::string& guid, const LLGameControl::Options& options);
 
     void addController(SDL_JoystickID id, const std::string& guid, const std::string& name);
@@ -431,15 +431,24 @@ namespace
     bool g_translateAgentActions = false;
     LLGameControl::AgentControlMode g_agentControlMode = LLGameControl::CONTROL_MODE_AVATAR;
 
+    // g_deviceOptions is a map of [guid,deviceOptions] pairs for known devices
+    // its values are expected to agree with connected device
     std::map<std::string, std::string> g_deviceOptions;
 
-    std::function<bool(const std::string&)> s_loadBoolean;
-    std::function<void(const std::string&, bool)> s_saveBoolean;
-    std::function<std::string(const std::string&)> s_loadString;
-    std::function<void(const std::string&, const std::string&)> s_saveString;
-    std::function<LLSD(const std::string&)> s_loadObject;
-    std::function<void(const std::string&, LLSD&)> s_saveObject;
+    LLGameControl::LoadSettingsFn s_loadSettings;
+    LLGameControl::SaveSettingsFn s_saveSettings;
     std::function<void()> s_updateUI;
+
+    // Persist a single key by wrapping it in a one-entry LLSD map and
+    // routing through the bulk save callback. Used by the write-through
+    // setters (setEnabled, setSendToServer, etc.) so the host only ever
+    // sees one persistence API.
+    void s_persistOne(const std::string& key, const LLSD& value)
+    {
+        LLSD map = LLSD::emptyMap();
+        map[key] = value;
+        s_saveSettings(map);
+    }
 
     std::string SETTING_ENABLE("EnableGameControl");
     std::string SETTING_SENDTOSERVER("GameControlToServer");
@@ -525,6 +534,23 @@ LLGameControl::Device::Device(int joystickID, const std::string& guid, const std
 , mGUID(guid)
 , mName(name)
 {
+}
+
+S16 LLGameControl::Options::AxisOptions::computeModifiedValue(S16 raw_value) const
+{
+    S16 new_value = (S16)(std::clamp(((S32)raw_value + S32(mOffset)) * mMultiplier, -32768, 32767));
+    if (abs(new_value) < mDeadZone)
+    {
+        new_value = 0;
+    }
+    return new_value;
+}
+
+void LLGameControl::Options::AxisOptions::resetToDefaults()
+{
+    mMultiplier = 1;
+    mDeadZone = 0;
+    mOffset = 0;
 }
 
 LLGameControl::Options::Options()
@@ -865,7 +891,7 @@ void LLGameControllerManager::resetDeviceOptionsToDefaults()
     }
 }
 
-void LLGameControllerManager::loadDeviceOptionsFromSettings()
+void LLGameControllerManager::applyRememberedDeviceOptions()
 {
     for (LLGameControl::Device& device : mDevices)
     {
@@ -873,7 +899,7 @@ void LLGameControllerManager::loadDeviceOptionsFromSettings()
     }
 }
 
-void LLGameControllerManager::saveDeviceOptionsToSettings() const
+void LLGameControllerManager::rememberDeviceOptions() const
 {
     for (const LLGameControl::Device& device : mDevices)
     {
@@ -891,12 +917,23 @@ void LLGameControllerManager::saveDeviceOptionsToSettings() const
 
 void LLGameControllerManager::setDeviceOptions(const std::string& guid, const LLGameControl::Options& options)
 {
-    // find Device by name
     for (LLGameControl::Device& device : mDevices)
     {
         if (device.getGUID() == guid)
         {
             device.mOptions = options;
+
+            // remember the options
+            std::string options_str = device.saveOptionsToString(true);
+            auto itr = g_deviceOptions.find(guid);
+            if (itr == g_deviceOptions.end())
+            {
+                g_deviceOptions.insert({guid, options_str});
+            }
+            else
+            {
+                itr->second = options_str;
+            }
             return;
         }
     }
@@ -1480,7 +1517,6 @@ void LLGameControl::setEnabled(bool enable)
     if (enable != g_enabled)
     {
         g_enabled = enable;
-        s_saveBoolean(SETTING_ENABLE, g_enabled);
     }
 }
 
@@ -1491,25 +1527,16 @@ bool LLGameControl::isInitialized()
 }
 
 // static
-// TODO: find a cleaner way to provide callbacks to LLGameControl
 void LLGameControl::init(const std::string& gamecontrollerdb_path,
-    std::function<bool(const std::string&)> loadBoolean,
-    std::function<void(const std::string&, bool)> saveBoolean,
-    std::function<std::string(const std::string&)> loadString,
-    std::function<void(const std::string&, const std::string&)> saveString,
-    std::function<LLSD(const std::string&)> loadObject,
-    std::function<void(const std::string&, const LLSD&)> saveObject,
+    LoadSettingsFn loadSettings,
+    SaveSettingsFn saveSettings,
     std::function<void()> updateUI)
 {
     if (g_gameControl)
         return;
 
-    llassert(loadBoolean);
-    llassert(saveBoolean);
-    llassert(loadString);
-    llassert(saveString);
-    llassert(loadObject);
-    llassert(saveObject);
+    llassert(loadSettings);
+    llassert(saveSettings);
     llassert(updateUI);
 
     bool result = SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_SENSOR);
@@ -1540,12 +1567,8 @@ void LLGameControl::init(const std::string& gamecontrollerdb_path,
 
     g_gameControl = LLGameControl::getInstance();
 
-    s_loadBoolean = loadBoolean;
-    s_saveBoolean = saveBoolean;
-    s_loadString = loadString;
-    s_saveString = saveString;
-    s_loadObject = loadObject;
-    s_saveObject = saveObject;
+    s_loadSettings = loadSettings;
+    s_saveSettings = saveSettings;
     s_updateUI = updateUI;
 
     loadFromSettings();
@@ -1705,28 +1728,28 @@ void LLGameControl::getFlycamInputs(std::vector<F32>& inputs_out)
 void LLGameControl::setSendToServer(bool enable)
 {
     g_sendToServer = enable;
-    s_saveBoolean(SETTING_SENDTOSERVER, g_sendToServer);
+    s_persistOne(SETTING_SENDTOSERVER, g_sendToServer);
 }
 
 // static
 void LLGameControl::setControlAgent(bool enable)
 {
     g_controlAgent = enable;
-    s_saveBoolean(SETTING_CONTROLAGENT, g_controlAgent);
+    s_persistOne(SETTING_CONTROLAGENT, g_controlAgent);
 }
 
 // static
 void LLGameControl::setTranslateAgentActions(bool enable)
 {
     g_translateAgentActions = enable;
-    s_saveBoolean(SETTING_TRANSLATEACTIONS, g_translateAgentActions);
+    s_persistOne(SETTING_TRANSLATEACTIONS, g_translateAgentActions);
 }
 
 // static
 void LLGameControl::setAgentControlMode(LLGameControl::AgentControlMode mode)
 {
     g_agentControlMode = mode;
-    s_saveString(SETTING_AGENTCONTROLMODE, convertAgentControlModeToString(mode));
+    s_persistOne(SETTING_AGENTCONTROLMODE, convertAgentControlModeToString(mode));
 }
 
 // static
@@ -2031,61 +2054,100 @@ void LLGameControl::initByDefault()
 }
 
 // static
-void LLGameControl::loadFromSettings()
+const std::vector<std::string>& LLGameControl::getSettingKeys()
 {
-    // In case of absence of the required setting the default value is assigned
-    g_enabled = s_loadBoolean(SETTING_ENABLE);
-    g_sendToServer = s_loadBoolean(SETTING_SENDTOSERVER);
-    g_controlAgent = s_loadBoolean(SETTING_CONTROLAGENT);
-    g_translateAgentActions = s_loadBoolean(SETTING_TRANSLATEACTIONS);
-    g_agentControlMode = convertStringToAgentControlMode(s_loadString(SETTING_AGENTCONTROLMODE));
-
-    g_manager.initializeMappingsByDefault();
-
-    // Load action-to-channel mappings
-    std::string analogMappings = s_loadString(SETTING_ANALOGMAPPINGS);
-    std::string binaryMappings = s_loadString(SETTING_BINARYMAPPINGS);
-    std::string flycamMappings = s_loadString(SETTING_FLYCAMMAPPINGS);
-    g_manager.setAnalogMappings(analogMappings);
-    g_manager.setBinaryMappings(binaryMappings);
-    g_manager.setFlycamMappings(flycamMappings);
-
-    // Load device-specific settings
-    g_deviceOptions.clear();
-    LLSD options = s_loadObject(SETTING_KNOWNCONTROLLERS);
-    for (auto it = options.beginMap(); it != options.endMap(); ++it)
-    {
-        g_deviceOptions.emplace(it->first, it->second);
-    }
-    g_manager.loadDeviceOptionsFromSettings();
+    // Order matches the historical load/save order in loadFromSettings/saveToSettings.
+    static const std::vector<std::string> keys = {
+        SETTING_ENABLE,
+        SETTING_SENDTOSERVER,
+        SETTING_CONTROLAGENT,
+        SETTING_TRANSLATEACTIONS,
+        SETTING_AGENTCONTROLMODE,
+        SETTING_ANALOGMAPPINGS,
+        SETTING_BINARYMAPPINGS,
+        SETTING_FLYCAMMAPPINGS,
+        SETTING_KNOWNCONTROLLERS
+    };
+    return keys;
 }
 
 // static
-void LLGameControl::saveToSettings()
+LLSD LLGameControl::getSettingsAsLLSD()
 {
-    s_saveBoolean(SETTING_ENABLE, g_enabled);
-    s_saveBoolean(SETTING_SENDTOSERVER, g_sendToServer);
-    s_saveBoolean(SETTING_CONTROLAGENT, g_controlAgent);
-    s_saveBoolean(SETTING_TRANSLATEACTIONS, g_translateAgentActions);
-    s_saveString(SETTING_AGENTCONTROLMODE, convertAgentControlModeToString(g_agentControlMode));
-    s_saveString(SETTING_ANALOGMAPPINGS, g_manager.getAnalogMappings());
-    s_saveString(SETTING_BINARYMAPPINGS, g_manager.getBinaryMappings());
-    s_saveString(SETTING_FLYCAMMAPPINGS, g_manager.getFlycamMappings());
+    LLSD result = LLSD::emptyMap();
+    result[SETTING_ENABLE]            = g_enabled;
+    result[SETTING_SENDTOSERVER]      = g_sendToServer;
+    result[SETTING_CONTROLAGENT]      = g_controlAgent;
+    result[SETTING_TRANSLATEACTIONS]  = g_translateAgentActions;
+    result[SETTING_AGENTCONTROLMODE]  = convertAgentControlModeToString(g_agentControlMode);
+    result[SETTING_ANALOGMAPPINGS]    = g_manager.getAnalogMappings();
+    result[SETTING_BINARYMAPPINGS]    = g_manager.getBinaryMappings();
+    result[SETTING_FLYCAMMAPPINGS]    = g_manager.getFlycamMappings();
 
-    g_manager.saveDeviceOptionsToSettings();
+    // Refresh g_deviceOptions from current device state
+    g_manager.rememberDeviceOptions();
 
-    // construct LLSD version of g_deviceOptions but only include non-empty values
+    // serialize settings
+    // /but omit devices whose options string is empty so we don't store noise
     LLSD deviceOptions = LLSD::emptyMap();
     for (const auto& [guid, options] : g_deviceOptions)
     {
         if (!options.empty())
         {
-            LLSD value(options);
-            deviceOptions.insert(guid, value);
+            deviceOptions.insert(guid, LLSD(options));
         }
     }
+    result[SETTING_KNOWNCONTROLLERS] = deviceOptions;
 
-    s_saveObject(SETTING_KNOWNCONTROLLERS, deviceOptions);
+    return result;
+}
+
+// static
+void LLGameControl::applySettingsFromLLSD(const LLSD& settings)
+{
+    if (settings.has(SETTING_ENABLE))            g_enabled = settings[SETTING_ENABLE].asBoolean();
+    if (settings.has(SETTING_SENDTOSERVER))      g_sendToServer = settings[SETTING_SENDTOSERVER].asBoolean();
+    if (settings.has(SETTING_CONTROLAGENT))      g_controlAgent = settings[SETTING_CONTROLAGENT].asBoolean();
+    if (settings.has(SETTING_TRANSLATEACTIONS))  g_translateAgentActions = settings[SETTING_TRANSLATEACTIONS].asBoolean();
+    if (settings.has(SETTING_AGENTCONTROLMODE))  g_agentControlMode = convertStringToAgentControlMode(settings[SETTING_AGENTCONTROLMODE].asString());
+
+    // Action-to-channel mappings: setAnalogMappings/setBinaryMappings/setFlycamMappings
+    // only override the actions named in their argument string, leaving others at the
+    // current value -- so we must reset to defaults first to get reproducible output
+    // when at least one mapping key is being applied.
+    bool any_mappings = settings.has(SETTING_ANALOGMAPPINGS)
+                     || settings.has(SETTING_BINARYMAPPINGS)
+                     || settings.has(SETTING_FLYCAMMAPPINGS);
+    if (any_mappings)
+    {
+        g_manager.initializeMappingsByDefault();
+        if (settings.has(SETTING_ANALOGMAPPINGS)) g_manager.setAnalogMappings(settings[SETTING_ANALOGMAPPINGS].asString());
+        if (settings.has(SETTING_BINARYMAPPINGS)) g_manager.setBinaryMappings(settings[SETTING_BINARYMAPPINGS].asString());
+        if (settings.has(SETTING_FLYCAMMAPPINGS)) g_manager.setFlycamMappings(settings[SETTING_FLYCAMMAPPINGS].asString());
+    }
+
+    g_deviceOptions.clear();
+    if (settings.has(SETTING_KNOWNCONTROLLERS))
+    {
+        const LLSD& options = settings[SETTING_KNOWNCONTROLLERS];
+        for (auto it = options.beginMap(); it != options.endMap(); ++it)
+        {
+            g_deviceOptions.emplace(it->first, it->second.asString());
+        }
+        g_manager.applyRememberedDeviceOptions();
+    }
+}
+
+// static
+void LLGameControl::loadFromSettings()
+{
+    applySettingsFromLLSD(s_loadSettings(getSettingKeys()));
+}
+
+// static
+void LLGameControl::saveToSettings()
+{
+    s_saveSettings(getSettingsAsLLSD());
 }
 
 // static

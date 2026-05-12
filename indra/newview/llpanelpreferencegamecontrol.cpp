@@ -77,13 +77,11 @@ LLPanelPreferenceGameControl::~LLPanelPreferenceGameControl()
 
 static LLPanelInjector<LLPanelPreferenceGameControl> t_pref_game_control("panel_preference_game_control");
 
-// Saves current UI state to settings.
-// Extracts channel mappings from the action table and converts to string format.
-// Also saves per-device options (axis settings, remappings) to KnownGameControllers.
-void LLPanelPreferenceGameControl::saveSettings()
+// Snapshot the panel's UI state into an LLSD map keyed by gSavedSettings names.
+// The returned map can be persisted (saveSettings) or applied directly to
+// LLGameControl runtime state via LLGameControl::applySettingsFromLLSD().
+LLSD LLPanelPreferenceGameControl::getSettingsAsLLSD()
 {
-    LLPanelPreference::saveSettings();
-
     std::vector<LLScrollListItem*> items = mActionTable->getAllData();
 
     // Lambda to find the channel associated with an action by looking it up in the UI table
@@ -100,43 +98,48 @@ void LLPanelPreferenceGameControl::saveSettings()
         return LLGameControl::InputChannel();
     };
 
+    LLSD result = LLSD::emptyMap();
+    result["AnalogChannelMappings"] = LLGameControl::stringifyAnalogMappings(getChannel);
+    result["BinaryChannelMappings"] = LLGameControl::stringifyBinaryMappings(getChannel);
+    result["FlycamChannelMappings"] = LLGameControl::stringifyFlycamMappings(getChannel);
+
+    // Serialize per-device options, omitting any with empty settings strings
+    LLSD deviceOptions = LLSD::emptyMap();
+    for (auto& [guid, device] : mDeviceOptions)
+    {
+        device.settings = device.options.saveToString(device.name);
+        if (!device.settings.empty())
+        {
+            deviceOptions.insert(guid, device.settings);
+        }
+    }
+    result["KnownGameControllers"] = deviceOptions;
+
+    return result;
+}
+
+// Saves current UI state to settings.
+// Extracts channel mappings from the action table and converts to string format.
+// Also saves per-device options (axis settings, remappings) to KnownGameControllers.
+void LLPanelPreferenceGameControl::saveSettings()
+{
+    LLPanelPreference::saveSettings();
+
     if (mOrigSettings.isEmpty())
     {
         rememberOriginalSettings();
     }
 
-    // Save action->channel mappings as strings (analog=axes, binary=buttons, flycam=camera)
-    if (LLControlVariable* analogMappings = gSavedSettings.getControl("AnalogChannelMappings"))
+    // Push every entry of the snapshot into gSavedSettings, also tracking
+    // the new value in mSavedValues so the base panel's accounting stays in sync.
+    LLSD settings = getSettingsAsLLSD();
+    for (auto it = settings.beginMap(); it != settings.endMap(); ++it)
     {
-        analogMappings->set(LLGameControl::stringifyAnalogMappings(getChannel));
-        mSavedValues[analogMappings] = analogMappings->getValue();
-    }
-
-    if (LLControlVariable* binaryMappings = gSavedSettings.getControl("BinaryChannelMappings"))
-    {
-        binaryMappings->set(LLGameControl::stringifyBinaryMappings(getChannel));
-        mSavedValues[binaryMappings] = binaryMappings->getValue();
-    }
-
-    if (LLControlVariable* flycamMappings = gSavedSettings.getControl("FlycamChannelMappings"))
-    {
-        flycamMappings->set(LLGameControl::stringifyFlycamMappings(getChannel));
-        mSavedValues[flycamMappings] = flycamMappings->getValue();
-    }
-
-    if (LLControlVariable* knownControllers = gSavedSettings.getControl("KnownGameControllers"))
-    {
-        LLSD deviceOptions(LLSD::emptyMap());
-        for (auto& [guid, device] : mDeviceOptions)
+        if (LLControlVariable* control = gSavedSettings.getControl(it->first))
         {
-            device.settings = device.options.saveToString(device.name);
-            if (!device.settings.empty())
-            {
-                deviceOptions.insert(guid, device.settings);
-            }
+            control->set(it->second);
+            mSavedValues[control] = control->getValue();
         }
-        knownControllers->set(deviceOptions);
-        mSavedValues[knownControllers] = deviceOptions;
     }
 }
 
@@ -353,11 +356,10 @@ void LLPanelPreferenceGameControl::applyGameControlInput()
         sSelectedGrid->deselectAllItems();
         sGameControlPanel->clearSelectionState();
 
-        // WORKAROUND: to immediately apply changes we save to settings and then load them.
-        // TODO: provide a more direct way to apply changes to LLGameControl without writing to file,
-        // then we can call sGameControlPanel->saveSettings() just once in ::apply()
-        sGameControlPanel->saveSettings();
-        LLGameControl::loadFromSettings();
+        // Push the panel's pending UI state straight into LLGameControl's
+        // runtime without touching gSavedSettings -- the eventual OK click
+        // (and the framework-driven saveSettings()) will persist them.
+        LLGameControl::applySettingsFromLLSD(sGameControlPanel->getSettingsAsLLSD());
     }
 }
 
@@ -369,7 +371,7 @@ void LLPanelPreferenceGameControl::onAxisOptionsSelect()
 
     if (LLScrollListItem* row = mAxisOptions->getFirstSelected())
     {
-        LLGameControl::Options& options = getSelectedDeviceOptions();
+        LLGameControl::Options& deviceOptions = getSelectedDeviceOptions();
         S32 row_index = mAxisOptions->getItemIndex(row);
 
         {
@@ -377,7 +379,31 @@ void LLPanelPreferenceGameControl::onAxisOptionsSelect()
             // but doesn't automatically update the underlying option
             constexpr S32 invert_checkbox_column = 1;
             bool invert = row->getColumn(invert_checkbox_column)->getValue().asBoolean();
-            options.getAxisOptions()[row_index].mMultiplier = invert ? -1 : 1;
+            S32 multiplier = invert ? -1 : 1;
+            if (multiplier != deviceOptions.getAxisOptions()[row_index].mMultiplier)
+            {
+                auto& axis_options = deviceOptions.getAxisOptions();
+                deviceOptions.getAxisOptions()[row_index].mMultiplier = multiplier;
+
+                if (row_index == LLGameControl::AXIS_TRIGGERLEFT
+                        || row_index == LLGameControl::AXIS_TRIGGERRIGHT)
+                {
+                    // The two trigger axes act as one bidirectional axis under the hood,
+                    // so their inversion must stay in sync -- update the sibling axis's
+                    // option and reflect the new state in its checkbox cell.
+                    S32 other_row_index = row_index == LLGameControl::AXIS_TRIGGERLEFT
+                            ? LLGameControl::AXIS_TRIGGERRIGHT
+                            : LLGameControl::AXIS_TRIGGERLEFT;
+                    deviceOptions.getAxisOptions()[other_row_index].mMultiplier = multiplier;
+
+                    if (LLScrollListItem* other_row = mAxisOptions->getItemByIndex(other_row_index))
+                    {
+                        other_row->getColumn(invert_checkbox_column)->setValue(invert);
+                    }
+                }
+
+                LLGameControl::setDeviceOptions(mSelectedDeviceGUID, deviceOptions);
+            }
         }
 
         S32 column_index = row->getSelectedCell();
@@ -388,20 +414,18 @@ void LLPanelPreferenceGameControl::onAxisOptionsSelect()
             {
                 mNumericValueEditor->setMinValue(0);
                 mNumericValueEditor->setMaxValue(LLGameControl::MAX_AXIS_DEAD_ZONE);
-                mNumericValueEditor->setValue(options.getAxisOptions()[row_index].mDeadZone);
+                mNumericValueEditor->setValue(deviceOptions.getAxisOptions()[row_index].mDeadZone);
             }
             else // column_index == 3
             {
                 mNumericValueEditor->setMinValue(-LLGameControl::MAX_AXIS_OFFSET);
                 mNumericValueEditor->setMaxValue(LLGameControl::MAX_AXIS_OFFSET);
-                mNumericValueEditor->setValue(options.getAxisOptions()[row_index].mOffset);
+                mNumericValueEditor->setValue(deviceOptions.getAxisOptions()[row_index].mOffset);
             }
             mNumericValueEditor->setVisible(true);
         }
 
         initCombobox(row, mAxisOptions);
-
-        LLGameControl::setDeviceOptions(mSelectedDeviceGUID, options);
     }
 }
 
@@ -516,7 +540,7 @@ bool LLPanelPreferenceGameControl::postBuild()
     populateActionTableRows("game_control_table_camera_rows.xml"); // Flycam movement actions
 
     // Populate device settings tables with empty rows
-    populateOptionsTableRows();
+    populateAxisOptionsTableRows();
     populateMappingTableRows(mAxisMappings, mAxisSelector, LLGameControl::NUM_AXES);
     populateMappingTableRows(mButtonMappings, mBinaryChannelSelector, LLGameControl::NUM_BUTTONS);
 
@@ -580,34 +604,10 @@ void LLPanelPreferenceGameControl::cancel(const std::vector<std::string> setting
         return;
     }
 
-    // Restore original settings to the control variables
-    if (LLControlVariable* analogMappings = gSavedSettings.getControl("AnalogChannelMappings"))
-    {
-        analogMappings->set(mOrigSettings["AnalogChannelMappings"]);
-        mSavedValues[analogMappings] = analogMappings->getValue();
-    }
-
-    if (LLControlVariable* binaryMappings = gSavedSettings.getControl("BinaryChannelMappings"))
-    {
-        binaryMappings->set(mOrigSettings["BinaryChannelMappings"]);
-        mSavedValues[binaryMappings] = binaryMappings->getValue();
-    }
-
-    if (LLControlVariable* flycamMappings = gSavedSettings.getControl("FlycamChannelMappings"))
-    {
-        flycamMappings->set(mOrigSettings["FlycamChannelMappings"]);
-        mSavedValues[flycamMappings] = flycamMappings->getValue();
-    }
-
-    if (LLControlVariable* knownControllers = gSavedSettings.getControl("KnownGameControllers"))
-    {
-        LLSD deviceOptions = mOrigSettings["KnownGameControllers"];
-        knownControllers->set(deviceOptions);
-        mSavedValues[knownControllers] = deviceOptions;
-    }
-
-    // load from global settings after values have been restored
-    LLGameControl::loadFromSettings();
+    // Restore in-memory state from the snapshot, then push back to gSavedSettings
+    // via the bulk save path so persistence stays consistent.
+    LLGameControl::applySettingsFromLLSD(mOrigSettings);
+    LLGameControl::saveToSettings();
 }
 
 // Rebuilds the internal device options map from LLGameControl state.
@@ -798,18 +798,18 @@ void LLPanelPreferenceGameControl::populateDeviceSettings(const std::string& gui
     const DeviceOptions& deviceOptions = options_it->second;
 
     // Populate all three device settings sub-tabs
-    populateOptionsTableCells();
+    populateAxisOptionsTableCells();
     populateMappingTableCells(mAxisMappings, deviceOptions.options.getAxisMap(), mAxisSelector);
     populateMappingTableCells(mButtonMappings, deviceOptions.options.getButtonMap(), mBinaryChannelSelector);
 }
 
 // Creates empty rows in the axis options table (one per axis).
 // Columns: axis name, invert checkbox, deadzone, offset
-void LLPanelPreferenceGameControl::populateOptionsTableRows()
+void LLPanelPreferenceGameControl::populateAxisOptionsTableRows()
 {
     mAxisOptions->clearRows();
 
-    std::vector<LLScrollListItem*> items = mAnalogChannelSelector->getAllData();
+    std::vector<LLScrollListItem*> items = mAxisSelector->getAllData();
 
     LLScrollListItem::Params row_params;
     LLScrollListCell::Params cell_params;
@@ -833,7 +833,7 @@ void LLPanelPreferenceGameControl::populateOptionsTableRows()
 }
 
 // Fills axis options table cells with current device settings.
-void LLPanelPreferenceGameControl::populateOptionsTableCells()
+void LLPanelPreferenceGameControl::populateAxisOptionsTableCells()
 {
     std::vector<LLScrollListItem*> rows = mAxisOptions->getAllData();
     const auto& all_axis_options = getSelectedDeviceOptions().getAxisOptions();
@@ -1130,20 +1130,5 @@ void LLPanelPreferenceGameControl::resetButtonMappingsToDefaults()
 // Captures current settings values into mOrigSettings for later restoration upon cancel().
 void LLPanelPreferenceGameControl::rememberOriginalSettings()
 {
-    if (LLControlVariable* analogMappings = gSavedSettings.getControl("AnalogChannelMappings"))
-    {
-        mOrigSettings.insert("AnalogChannelMappings", gSavedSettings.getString("AnalogChannelMappings"));
-    }
-    if (LLControlVariable* binaryMappings = gSavedSettings.getControl("BinaryChannelMappings"))
-    {
-        mOrigSettings.insert("BinaryChannelMappings", gSavedSettings.getString("BinaryChannelMappings"));
-    }
-    if (LLControlVariable* flycamMappings = gSavedSettings.getControl("FlycamChannelMappings"))
-    {
-        mOrigSettings.insert("FlycamChannelMappings", gSavedSettings.getString("FlycamChannelMappings"));
-    }
-    if (LLControlVariable* knownControllers = gSavedSettings.getControl("KnownGameControllers"))
-    {
-        mOrigSettings.insert("KnownGameControllers", gSavedSettings.getLLSD("KnownGameControllers"));
-    }
+    mOrigSettings = LLGameControl::getSettingsAsLLSD();
 }

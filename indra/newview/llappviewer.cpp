@@ -1106,13 +1106,29 @@ bool LLAppViewer::init()
     }
 
     LLGameControl::init(gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "gamecontrollerdb.txt"),
-        [&](const std::string& name) -> bool { return gSavedSettings.getBOOL(name); },
-        [&](const std::string& name, bool value) { gSavedSettings.setBOOL(name, value); },
-        [&](const std::string& name) -> std::string { return gSavedSettings.getString(name); },
-        [&](const std::string& name, const std::string& value) { gSavedSettings.setString(name, value); },
-        [&](const std::string& name) -> LLSD { return gSavedSettings.getLLSD(name); },
-        [&](const std::string& name, const LLSD& value) { gSavedSettings.setLLSD(name, value); },
-        [&]() { LLPanelPreferenceGameControl::updateDeviceList(); });
+        [](const std::vector<std::string>& keys) -> LLSD
+        {
+            LLSD result = LLSD::emptyMap();
+            for (const std::string& key : keys)
+            {
+                if (gSavedSettings.controlExists(key))
+                {
+                    result[key] = gSavedSettings.getLLSD(key);
+                }
+            }
+            return result;
+        },
+        [](const LLSD& key_values)
+        {
+            for (auto it = key_values.beginMap(); it != key_values.endMap(); ++it)
+            {
+                if (gSavedSettings.controlExists(it->first))
+                {
+                    gSavedSettings.setLLSD(it->first, it->second);
+                }
+            }
+        },
+        []() { LLPanelPreferenceGameControl::updateDeviceList(); });
 
     try
     {

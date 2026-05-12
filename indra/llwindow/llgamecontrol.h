@@ -183,18 +183,24 @@ public:
             U16 mDeadZone { 0 };
             S16 mOffset { 0 };
 
+            void resetToDefaults();
+            /*
             void resetToDefaults()
             {
                 mMultiplier = 1;
                 mDeadZone = 0;
                 mOffset = 0;
             }
+            */
 
+            S16 computeModifiedValue(S16 raw_value) const;
+            /*
             S16 computeModifiedValue(S16 raw_value) const
             {
                 S32 new_value = ((S32)raw_value + S32(mOffset)) * mMultiplier;
                 return (S16)(std::clamp(new_value, -32768, 32767));
             }
+            */
 
             std::string saveToString() const;
             void loadFromString(std::string options);
@@ -266,13 +272,19 @@ public:
     static void setEnabled(bool enabled);
 
     static bool isInitialized();
+
+    // Bulk settings I/O is delegated to the host so this library does not
+    // need to know about LLControlGroup at compile time.
+    //   loadSettings(keys)        -- returns an LLSD map of the requested keys.
+    //                                Keys absent from the host's store are
+    //                                omitted from the returned map.
+    //   saveSettings(key_values)  -- writes every entry of the LLSD map.
+    using LoadSettingsFn = std::function<LLSD(const std::vector<std::string>&)>;
+    using SaveSettingsFn = std::function<void(const LLSD&)>;
+
     static void init(const std::string& gamecontrollerdb_path,
-        std::function<bool(const std::string&)> loadBoolean,
-        std::function<void(const std::string&, bool)> saveBoolean,
-        std::function<std::string(const std::string&)> loadString,
-        std::function<void(const std::string&, const std::string&)> saveString,
-        std::function<LLSD(const std::string&)> loadObject,
-        std::function<void(const std::string&, const LLSD&)> saveObject,
+        LoadSettingsFn loadSettings,
+        SaveSettingsFn saveSettings,
         std::function<void()> updateUI);
     static void terminate();
 
@@ -342,6 +354,18 @@ public:
     static void initByDefault();
     static void loadFromSettings();
     static void saveToSettings();
+
+    // Settings serialization helpers used by loadFromSettings/saveToSettings
+    // and exposed for callers that need to snapshot or restore module state
+    // (e.g. preference panel cancel-restore).
+    //   getSettingKeys()                 -- the host setting names this module reads/writes.
+    //   getSettingsAsLLSD()              -- snapshot of current in-memory state, keyed by the same names.
+    //   applySettingsFromLLSD(settings)  -- apply 'settings' to in-memory state.
+    //                                       Keys not present in 'settings' are left unchanged.
+    static const std::vector<std::string>& getSettingKeys();
+    static LLSD getSettingsAsLLSD();
+    static void applySettingsFromLLSD(const LLSD& settings);
+
     static void setDeviceOptions(const std::string& guid, const Options& options);
 };
 

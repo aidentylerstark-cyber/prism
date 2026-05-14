@@ -1064,6 +1064,11 @@ void LLPanelPreferenceGameControl::onResetToDefaults()
             resetButtonMappingsToDefaults();
         }
     }
+
+    // Push the panel's pending UI state straight into LLGameControl's runtime so
+    // the effect is immediate.  gSavedSettings is updated later via saveSettings()
+    // when the user clicks OK.
+    LLGameControl::applySettingsFromLLSD(getSettingsAsLLSD());
 }
 
 // Resets action-to-channel mappings to built-in defaults.

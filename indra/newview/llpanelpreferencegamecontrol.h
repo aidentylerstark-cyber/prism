@@ -129,6 +129,12 @@ private:
     bool initCombobox(LLScrollListItem* item, LLScrollListCtrl* grid);  // Show combobox over cell
     void clearSelectionState();  // Hide editors and clear selection tracking
 
+    // Clears any other action row in the same category (avatar movement vs. flycam)
+    // whose channel cell holds the given label.  Avatar movement and flycam are
+    // independent no-duplicate sets; duplicate empty (NONE) mappings are allowed.
+    // No-op if label is empty or no row is currently selected.
+    void removeDuplicateActionMapping(const std::string& label);
+
     // UI helpers
     void addActionTableSeparator();   // Add visual separator to action table
     void updateEnable();              // Enable/disable UI based on global setting

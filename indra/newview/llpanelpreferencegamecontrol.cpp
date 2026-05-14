@@ -260,6 +260,9 @@ void LLPanelPreferenceGameControl::onCommitInputChannel(LLUICtrl* ctrl)
         std::string value = combobox->getValue();
         std::string label = (value == "NONE") ?
             LLStringUtil::null : combobox->getSelectedItemLabel();
+
+        removeDuplicateActionMapping(label);
+
         sSelectedCell->setValue(label);
     }
     else
@@ -284,6 +287,11 @@ void LLPanelPreferenceGameControl::onCommitInputChannel(LLUICtrl* ctrl)
     }
     sSelectedGrid->deselectAllItems();
     clearSelectionState();
+
+    // Push the panel's pending UI state straight into LLGameControl's runtime so
+    // the effect is immediate.  gSavedSettings is updated later via saveSettings()
+    // when the user clicks OK.
+    LLGameControl::applySettingsFromLLSD(getSettingsAsLLSD());
 }
 
 // Returns true if a cell is currently selected and waiting for input channel assignment.
@@ -323,33 +331,10 @@ void LLPanelPreferenceGameControl::applyGameControlInput()
         std::string channel_name = channel.getLocalName();
         std::string channel_label = LLPanelPreferenceGameControl::getChannelLabel(channel_name, combobox->getAllData());
 
-        // Before assigning this channel, remove it from any other action row in the same
-        // category that already holds it.  Avatar movement and flycam are independent
-        // no-duplicate sets, so a channel may appear in one row of each set simultaneously.
-        // Device remapping tables allow duplicate targets, so this only applies to mActionTable.
-        if (!channel_label.empty() && sSelectedGrid == sGameControlPanel->mActionTable)
+        // Device remapping tables allow duplicate targets, so dedup only applies to mActionTable.
+        if (sSelectedGrid == sGameControlPanel->mActionTable)
         {
-            bool selected_is_flycam =
-                LLGameControl::getActionNameType(sSelectedItem->getValue().asString())
-                == LLGameControl::ACTION_NAME_FLYCAM;
-
-            for (LLScrollListItem* item : sGameControlPanel->mActionTable->getAllData())
-            {
-                if (item != sSelectedItem && item->getNumColumns() >= 2)
-                {
-                    bool item_is_flycam =
-                        LLGameControl::getActionNameType(item->getValue().asString())
-                        == LLGameControl::ACTION_NAME_FLYCAM;
-                    if (item_is_flycam != selected_is_flycam)
-                        continue;
-
-                    LLScrollListCell* cell = item->getColumn(1);
-                    if (cell && cell->getValue().asString() == channel_label)
-                    {
-                        cell->setValue(LLStringUtil::null);
-                    }
-                }
-            }
+            sGameControlPanel->removeDuplicateActionMapping(channel_label);
         }
 
         sSelectedCell->setValue(channel_label);
@@ -955,6 +940,38 @@ void LLPanelPreferenceGameControl::fitInRect(LLUICtrl* ctrl, LLScrollListCtrl* g
             childRect.mRight = rect.mRight;
         }
         child->setRect(childRect);
+    }
+}
+
+// Clears any other action row in the same category (avatar movement vs. flycam) whose
+// channel cell holds the given label.  Avatar movement and flycam are independent
+// no-duplicate sets, so a channel may appear in one row of each set simultaneously.
+// Duplicate empty (NONE) mappings are allowed, so no-op when label is empty.
+void LLPanelPreferenceGameControl::removeDuplicateActionMapping(const std::string& label)
+{
+    if (label.empty() || !sSelectedItem)
+        return;
+
+    bool selected_is_flycam =
+        LLGameControl::getActionNameType(sSelectedItem->getValue().asString())
+        == LLGameControl::ACTION_NAME_FLYCAM;
+
+    for (LLScrollListItem* item : mActionTable->getAllData())
+    {
+        if (item == sSelectedItem || item->getNumColumns() < 2)
+            continue;
+
+        bool item_is_flycam =
+            LLGameControl::getActionNameType(item->getValue().asString())
+            == LLGameControl::ACTION_NAME_FLYCAM;
+        if (item_is_flycam != selected_is_flycam)
+            continue;
+
+        LLScrollListCell* cell = item->getColumn(1);
+        if (cell && cell->getValue().asString() == label)
+        {
+            cell->setValue(LLStringUtil::null);
+        }
     }
 }
 

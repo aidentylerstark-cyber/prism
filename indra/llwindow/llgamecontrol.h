@@ -165,7 +165,8 @@ public:
             return mType == other.mType && mSign == other.mSign && mIndex == other.mIndex;
         }
 
-        std::string getLocalName() const; // AXIS_0-, AXIS_0+, BUTTON_0, NONE etc.
+        std::string getLocalName() const; // AXIS_0, AXIS_1, BUTTON_0, NONE etc.
+        std::string getSignedLocalName() const; // AXIS_0-, AXIS_0+, BUTTON_0, NONE etc.
         std::string getRemoteName() const; // GAME_CONTROL_AXIS_LEFTX, GAME_CONTROL_BUTTON_A, etc
 
         Type mType { TYPE_NONE };

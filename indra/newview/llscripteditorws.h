@@ -45,6 +45,7 @@ class LLChat;
 class LLPanel;
 class LLPublishedPrimListener;
 class LLViewerObject;
+class LLInventoryItem;
 
 class LLScriptEditorWSConnection : public LLJSONRPCConnection, public std::enable_shared_from_this<LLScriptEditorWSConnection>
 {
@@ -215,6 +216,19 @@ protected:
     LLSD handleObjectRequest(U32 connection_id, const LLSD& params);
     LLSD handleObjectContentGet(const std::string& method, const LLSD& id, const LLSD& params);
     LLSD handleObjectContentSave(const std::string& method, const LLSD& id, const LLSD& params);
+    LLSD saveScript(LLViewerObject* prim, LLInventoryItem* item, const std::string& content, const LLSD& params);
+    LLSD saveNotecard(LLViewerObject* prim, LLInventoryItem* item, const std::string& content);
+    LLSD handleObjectItemDelete(U32 connection_id, const LLSD& params);
+    LLSD handleObjectItemCreate(const std::string& method, const LLSD& id, const LLSD& params);
+
+    struct ValidatedItem
+    {
+        LLViewerObject*     prim;
+        LLViewerObject*     root;
+        LLInventoryItem*    item;
+        LLAssetType::EType  type;
+    };
+    ValidatedItem validatePublishedItem(const LLSD& params, U32 permMask) const;
 
     // --- Object Content Publishing (helpers) ---
     LLSD buildPrimInventoryLLSD(LLViewerObject* object) const;
@@ -278,6 +292,7 @@ private:
 
     std::map<LLUUID, PublishedObjectInfo> mPublishedObjects;  // keyed by root object_id
     std::map<LLUUID, PendingPublish>      mPendingPublishes;  // keyed by root object_id
+    std::map<LLUUID, std::string>         mPendingItemCreates; // prim_id -> pump name awaiting inventory update
 
     boost::signals2::connection mLanguageChangeSignal;
     LLUUID mLastSyntaxId;

@@ -100,7 +100,7 @@ vscode://lindenlab.sl-vscode-plugin/connect[?port=<port>][&object=<uuid>][&scrip
 
 | Parameter | Required | Description |
 | --------- | -------- | ----------- |
-| `port`    | No       | Port number the viewer's WebSocket server is listening on. Overrides the user's configured port for this session. Defaults to the configured `slVscodeEdit.network.websocketPort` (default `9020`) if absent. Must be in range 1024–65535. |
+| `port`    | No       | Port number the viewer's WebSocket server is listening on. Overrides the user's configured port for this session. Defaults to the configured `slVscodeEdit.network.websocketPort` (default `9020`) if absent. Must be in range 1024-65535. |
 | `object`  | No       | UUID of a root prim. After the handshake completes the extension calls `object.request` to ask the viewer to publish this object. The viewer then sends an `object.publish` notification and the object appears as a workspace folder in the Explorer. |
 | `script`  | No       | UUID of a script. After the handshake completes the extension locates the corresponding temp file via `script.list` and opens it, triggering the normal `script.subscribe` + live-sync flow. |
 
@@ -128,18 +128,18 @@ When the URI contains an `object` or `script` parameter the extension acts only 
 
 ```
 URI received by extension
-        │
-        ▼
-WebSocket connects → session.handshake → session.ok
-        │
-        ├─ object=<uuid> → object.request({ object_id }) call
-        │                       │
-        │                       ▼  (async, when viewer is ready)
-        │                  object.publish notification
-        │
-        └─ script=<uuid> → script.list call → open temp file
-                                                    │
-                                                    ▼
+  |
+  v
+WebSocket connects -> session.handshake -> session.ok
+  |
+  |- object=<uuid> -> object.request({ object_id }) call
+  |                       |
+  |                       v  (async, when viewer is ready)
+  |                  object.publish notification
+  |
+  \- script=<uuid> -> script.list call -> open temp file
+                |
+                v
                                           script.subscribe + live-sync
 ```
 
@@ -147,42 +147,42 @@ WebSocket connects → session.handshake → session.ok
 
 | Method                          | Direction          | Type         | Interface/Parameters       |
 | ------------------------------- | ------------------ | ------------ | -------------------------- |
-| `session.handshake`             | Viewer → Extension | Call         | `SessionHandshake`         |
-| `session.handshake` (response)  | Extension → Viewer | Response     | `SessionHandshakeResponse` |
-| `session.ok`                    | Viewer → Extension | Notification | _(no interface)_           |
+| `session.handshake`             | Viewer -> Extension | Call         | `SessionHandshake`         |
+| `session.handshake` (response)  | Extension -> Viewer | Response     | `SessionHandshakeResponse` |
+| `session.ok`                    | Viewer -> Extension | Notification | _(no interface)_           |
 | `session.disconnect`            | Bidirectional      | Notification | `SessionDisconnect`        |
-| `script.subscribe`              | Extension → Viewer | Call         | `ScriptSubscribe`          |
-| `script.subscribe` (response)   | Viewer → Extension | Response     | `ScriptSubscribeResponse`  |
-| `script.unsubscribe`            | Viewer → Extension | Notification | `ScriptUnsubscribe`        |
-| `script.list`                   | Extension → Viewer | Call         | _(no parameters)_          |
-| `script.list` (response)        | Viewer → Extension | Response     | `ScriptList`               |
-| `language.syntax.id`            | Extension → Viewer | Call         | _(no parameters)_          |
-| `language.syntax.id` (response) | Viewer → Extension | Response     | `{ id: string }`           |
-| `language.syntax`               | Extension → Viewer | Call         | `{ kind: string }`         |
-| `language.syntax` (response)    | Viewer → Extension | Response     | `LanguageInfo`             |
-| `language.syntax.cache`            | Extension → Viewer | Call         | _(no parameters)_                    |
-| `language.syntax.cache` (response) | Viewer → Extension | Response     | `SyntaxCacheList`                    |
-| `language.syntax.get`              | Extension → Viewer | Call         | `{ filename: string, as_json?: boolean }` |
-| `language.syntax.get` (response)   | Viewer → Extension | Response     | `SyntaxCacheFile`                    |
-| `language.syntax.change`        | Viewer → Extension | Notification | `SyntaxChange`             |
-| `script.compiled`               | Viewer → Extension | Notification | `CompilationResult`        |
-| `runtime.debug`                 | Viewer → Extension | Notification | `RuntimeDebug`             |
-| `runtime.error`                 | Viewer → Extension | Notification | `RuntimeError`             |
-| `object.publish`                | Viewer → Extension | Notification | `ObjectPublishMessage`     |
-| `object.unpublish`              | Viewer → Extension | Notification | `ObjectUnpublishMessage`   |
-| `object.update`                 | Viewer → Extension | Notification | `ObjectUpdateMessage`      |
-| `object.content.get`            | Extension → Viewer | Call         | `ObjectContentGetParams`   |
-| `object.content.get` (response) | Viewer → Extension | Response     | `ObjectContentGetResponse` |
-| `object.content.save`           | Extension → Viewer | Call         | `ObjectContentSaveParams`  |
-| `object.content.save` (response)| Viewer → Extension | Response     | `ObjectContentSaveResponse`|
-| `object.item.create`            | Extension → Viewer | Call         | `ObjectItemCreateParams`   |
-| `object.item.create` (response) | Viewer → Extension | Response     | `ObjectItemCreateResponse` |
-| `object.item.delete`            | Extension → Viewer | Call         | `ObjectItemDeleteParams`   |
-| `object.item.delete` (response) | Viewer → Extension | Response     | `ObjectItemDeleteResponse` |
-| `object.script.set_running`     | Extension → Viewer | Call         | `ObjectScriptSetRunningParams` |
-| `object.script.set_running` (response) | Viewer → Extension | Response | `ObjectScriptSetRunningResponse` |
-| `object.request`                | Extension → Viewer | Call         | `ObjectRequestParams`          |
-| `object.request` (response)     | Viewer → Extension | Response     | `ObjectRequestResponse`        |
+| `script.subscribe`              | Extension -> Viewer | Call         | `ScriptSubscribe`          |
+| `script.subscribe` (response)   | Viewer -> Extension | Response     | `ScriptSubscribeResponse`  |
+| `script.unsubscribe`            | Viewer -> Extension | Notification | `ScriptUnsubscribe`        |
+| `script.list`                   | Extension -> Viewer | Call         | _(no parameters)_          |
+| `script.list` (response)        | Viewer -> Extension | Response     | `ScriptList`               |
+| `language.syntax.id`            | Extension -> Viewer | Call         | _(no parameters)_          |
+| `language.syntax.id` (response) | Viewer -> Extension | Response     | `{ id: string }`           |
+| `language.syntax`               | Extension -> Viewer | Call         | `{ kind: string }`         |
+| `language.syntax` (response)    | Viewer -> Extension | Response     | `LanguageInfo`             |
+| `language.syntax.cache`            | Extension -> Viewer | Call         | _(no parameters)_                    |
+| `language.syntax.cache` (response) | Viewer -> Extension | Response     | `SyntaxCacheList`                    |
+| `language.syntax.get`              | Extension -> Viewer | Call         | `{ filename: string, as_json?: boolean }` |
+| `language.syntax.get` (response)   | Viewer -> Extension | Response     | `SyntaxCacheFile`                    |
+| `language.syntax.change`        | Viewer -> Extension | Notification | `SyntaxChange`             |
+| `script.compiled`               | Viewer -> Extension | Notification | `CompilationResult`        |
+| `runtime.debug`                 | Viewer -> Extension | Notification | `RuntimeDebug`             |
+| `runtime.error`                 | Viewer -> Extension | Notification | `RuntimeError`             |
+| `object.publish`                | Viewer -> Extension | Notification | `ObjectPublishMessage`     |
+| `object.unpublish`              | Viewer -> Extension | Notification | `ObjectUnpublishMessage`   |
+| `object.update`                 | Viewer -> Extension | Notification | `ObjectUpdateMessage`      |
+| `object.content.get`            | Extension -> Viewer | Call         | `ObjectContentGetParams`   |
+| `object.content.get` (response) | Viewer -> Extension | Response     | `ObjectContentGetResponse` |
+| `object.content.save`           | Extension -> Viewer | Call         | `ObjectContentSaveParams`  |
+| `object.content.save` (response)| Viewer -> Extension | Response     | `ObjectContentSaveResponse`|
+| `object.item.create`            | Extension -> Viewer | Call         | `ObjectItemCreateParams`   |
+| `object.item.create` (response) | Viewer -> Extension | Response     | `ObjectItemCreateResponse` |
+| `object.item.delete`            | Extension -> Viewer | Call         | `ObjectItemDeleteParams`   |
+| `object.item.delete` (response) | Viewer -> Extension | Response     | `ObjectItemDeleteResponse` |
+| `object.script.set_running`     | Extension -> Viewer | Call         | `ObjectScriptSetRunningParams` |
+| `object.script.set_running` (response) | Viewer -> Extension | Response | `ObjectScriptSetRunningResponse` |
+| `object.request`                | Extension -> Viewer | Call         | `ObjectRequestParams`          |
+| `object.request` (response)     | Viewer -> Extension | Response     | `ObjectRequestResponse`        |
 
 ## Session Management Interfaces
 
@@ -387,7 +387,7 @@ interface SyntaxCacheList {
 | `lua_keywords_pretty.xml`        | Luau keyword definitions in formatted LLSD XML format |
 | `secondlife_selene.yml`          | Luau Selene linter configuration in YAML format |
 
-Not all files may be present in every cache — the actual list returned by `language.syntax.cache` reflects only what is available on the viewer's local filesystem at the time of the request.
+Not all files may be present in every cache - the actual list returned by `language.syntax.cache` reflects only what is available on the viewer's local filesystem at the time of the request.
 
 ### Language Syntax Cache Get
 
@@ -476,9 +476,9 @@ interface ScriptSubscribeResponse {
 - `success`: Whether the subscription was successful
 - `status`: Numeric status code indicating the result:
   - `0`: Success
-  - `1`: Invalid editor — the script editor panel is no longer open
-  - `2`: Invalid subscription — no subscription found for the given `script_id`
-  - `3`: Already subscribed — another connection is already subscribed to this script
+  - `1`: Invalid editor - the script editor panel is no longer open
+  - `2`: Invalid subscription - no subscription found for the given `script_id`
+  - `3`: Already subscribed - another connection is already subscribed to this script
   - `4`: Internal server error
 - `object_id` (optional): The in-world UUID of the object containing the script
 - `item_id` (optional): The inventory item UUID of the script within the object
@@ -616,7 +616,7 @@ interface RuntimeError {
 - `object_id`: Unique identifier for the object containing the script
 - `object_name`: Human-readable name of the object
 - `message`: The full raw chat text of the runtime error message as received from the simulator
-- `error`: Extracted error description. Currently always an empty string — runtime error extraction from the simulator's multi-message format is not yet fully implemented.
+- `error`: Extracted error description. Currently always an empty string - runtime error extraction from the simulator's multi-message format is not yet fully implemented.
 - `line`: Line number where the error occurred. Currently always `0` for the same reason.
 - `stack` (optional): Stack trace lines if they could be extracted from the error message
 
@@ -683,7 +683,7 @@ These interfaces support publishing in-world object inventories (scripts and not
 ```typescript
 type InventoryItemType = "script" | "notecard";
 
-type ScriptVM = "lso" | "mono" | "luau";
+type ScriptVM = "lsl2" | "mono" | "luau";
 
 /** Permission mask fields. Only owner and next_owner are transmitted. */
 interface ItemPermissions {
@@ -710,7 +710,7 @@ interface ObjectInventoryItem {
 /** A linked (child) prim within a linkset */
 interface LinkedObject {
   link_id: string;          // UUID of the linked prim
-  link_number: number;      // Link number (root=1, children≥2)
+  link_number: number;      // Link number (root=1, children>=2)
   link_name: string;
   link_description?: string;
   inventory: ObjectInventoryItem[];
@@ -766,7 +766,7 @@ interface ObjectPublishMessage {
 
 **JSON-RPC Method:** `object.unpublish` (notification from viewer)
 
-Sent when the viewer removes a previously published object — for example when the owner deselects it, moves away, or the object is deleted.
+Sent when the viewer removes a previously published object - for example when the owner deselects it, moves away, or the object is deleted.
 
 ```typescript
 interface ObjectUnpublishMessage {
@@ -833,15 +833,15 @@ Requests the text content of a script or notecard. The extension calls this lazi
 
 ```typescript
 interface ObjectContentGetParams {
-  prim_id: string;  // UUID of any prim (root or child) — no object_id + link_id needed
+  prim_id: string;  // UUID of any prim (root or child) - no object_id + link_id needed
   item_id: string;
 }
 
 interface ObjectContentGetResponse {
+  success: boolean;
   prim_id: string;
   item_id: string;
-  content: string;
-  encoding?: "utf-8" | "base64";
+  content: string;  // Raw text content (UTF-8). Notecard envelope is unwrapped automatically.
 }
 ```
 
@@ -849,8 +849,8 @@ interface ObjectContentGetResponse {
 
 - `prim_id`: UUID of the prim that owns the item. Child prims are addressable directly by UUID without knowing the root object_id.
 - `item_id`: Inventory item UUID.
-- `content`: The raw text content of the item.
-- `encoding` (optional): Encoding used for `content`. Defaults to `"utf-8"` if absent.
+- `success`: `true` on success.
+- `content`: The raw text content of the item. For notecards, the `Linden text version 2` envelope is stripped - only the body text is returned.
 
 ---
 
@@ -865,17 +865,28 @@ interface ObjectContentSaveParams {
   prim_id: string;
   item_id: string;
   content: string;
+  vm?: "mono" | "lsl2" | "luau";
 }
 
 interface ObjectContentSaveResponse {
   success: boolean;
+  prim_id?: string;
+  item_id?: string;
+  compiled?: boolean;
+  errors?: string[];
   message?: string;
 }
 ```
 
 **Fields:**
 
-- `success`: Whether the save (and compilation, if applicable) succeeded.
+- `prim_id`: UUID of the prim that owns the saved item.
+- `item_id`: UUID of the saved inventory item.
+- `content`: Raw script/notecard source text to store.
+- `vm` (optional): Scripts only compile target. Accepted values are `"mono"`, `"lsl2"`, `"luau"`. When `"luau"` is specified for an LSL script (as opposed to a native Luau script), the viewer automatically selects the correct LSL-on-Luau compile path. If omitted, inferred from item metadata or content analysis.
+- `success`: Whether the upload/save operation succeeded.
+- `compiled` (optional): Scripts only. `true` when compilation succeeded, `false` when source saved but compile failed.
+- `errors` (optional): Scripts only. Compiler diagnostics when `compiled` is `false`.
 - `message` (optional): Error description on failure.
 
 ---
@@ -884,24 +895,32 @@ interface ObjectContentSaveResponse {
 
 **JSON-RPC Method:** `object.item.create` (call from extension to viewer)
 
-Creates a new script or notecard in a prim's inventory.
+Creates a new script in a prim's inventory. The call is asynchronous - the viewer sends
+`RezScript` to the simulator and waits for the inventory-changed callback before returning
+the created item's details. The simulator may rename the item if a duplicate name exists.
+
+Notecard creation is not yet supported and will return an error.
 
 ```typescript
 interface ObjectItemCreateParams {
-  prim_id: string;
-  name: string;              // Pure SL inventory name — no file extension
-  type: InventoryItemType;   // "script" | "notecard"
-  vm?: ScriptVM;             // Scripts only: target VM. Defaults to viewer default if absent.
-  content?: string;          // Initial content. Empty item created if absent.
+  prim_id: string;           // UUID of the prim to create the item in
+  name: string;              // Pure SL inventory name - no file extension
+  type: InventoryItemType;   // "script" ("notecard" reserved for future)
+  vm: ScriptVM;              // Required for scripts: "luau" | "mono" | "lsl2"
 }
 
-interface ObjectItemCreateResponse {
-  success: boolean;
-  item_id?: string;          // UUID of the created item (on success)
-  item?: ObjectInventoryItem; // Full item metadata including assigned subtype (on success)
-  message?: string;          // Error description (on failure)
+// On success, returns an ObjectInventoryItem with prim_id:
+interface ObjectItemCreateResponse extends ObjectInventoryItem {
+  prim_id: string;           // Echoed prim UUID
 }
 ```
+
+**Notes:**
+- The response matches the `ObjectInventoryItem` structure (same fields as items in
+  `object.publish` and `object.update` notifications).
+- The `name` in the response may differ from the request if the simulator renamed it.
+- An `object.update` notification will also fire for the prim (since inventory changed).
+- Timeout: 30 seconds. Returns a JSON-RPC internal error if the simulator does not respond.
 
 ---
 
@@ -919,7 +938,8 @@ interface ObjectItemDeleteParams {
 
 interface ObjectItemDeleteResponse {
   success: boolean;
-  message?: string;
+  prim_id: string;   // Echoed back from request
+  item_id: string;   // Echoed back from request
 }
 ```
 
@@ -968,7 +988,7 @@ interface ObjectRequestResponse {
 **Fields:**
 
 - `object_id`: UUID of the root prim of the linkset to publish.
-- `success`: Whether the viewer accepted the request. A `true` response does not mean `object.publish` has been sent yet — it means the viewer will send it.
+- `success`: Whether the viewer accepted the request. A `true` response does not mean `object.publish` has been sent yet - it means the viewer will send it.
 - `message` (optional): Human-readable failure reason. Only present when `success` is `false`.
 
 **Sequence:**

@@ -106,6 +106,7 @@ set(viewer_SOURCE_FILES
     llappearancemgr.cpp
     llappviewer.cpp
     llappviewerlistener.cpp
+    llasyncinventoryskeletonloader.cpp
     llattachmentsmgr.cpp
     llaudiosourcevo.cpp
     llautoreplace.cpp
@@ -785,6 +786,7 @@ set(viewer_HEADER_FILES
     llappearancemgr.h
     llappviewer.h
     llappviewerlistener.h
+    llasyncinventoryskeletonloader.h
     llattachmentsmgr.h
     llaudiosourcevo.h
     llautoreplace.h

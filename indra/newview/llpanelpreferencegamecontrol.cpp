@@ -1023,6 +1023,7 @@ void LLPanelPreferenceGameControl::updateEnable()
         //mActionTable->deselectAllItems();
         mAnalogChannelSelector->setVisible(false);
         mBinaryChannelSelector->setVisible(false);
+        mAxisSelector->setVisible(false);
         clearSelectionState();
     }
 }

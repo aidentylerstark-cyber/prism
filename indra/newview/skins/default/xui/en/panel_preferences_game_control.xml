@@ -257,53 +257,29 @@
         width="380"
         height="18">
         <combo_box.item
-            label="AXIS_0- (Left stick: tilt right)"
-            name="AXIS_0-"
-            value="AXIS_0-"/>
+            label="AXIS_0 (Left stick: tilt left/right)"
+            name="AXIS_0"
+            value="AXIS_0"/>
         <combo_box.item
-            label="AXIS_0+ (Left stick: tilt left)"
-            name="AXIS_0+"
-            value="AXIS_0+"/>
+            label="AXIS_1 (Left stick: tilt forward/back)"
+            name="AXIS_1"
+            value="AXIS_1"/>
         <combo_box.item
-            label="AXIS_1- (Left stick: tilt back)"
-            name="AXIS_1-"
-            value="AXIS_1-"/>
+            label="AXIS_2 (Right stick: tilt left/right)"
+            name="AXIS_2"
+            value="AXIS_2"/>
         <combo_box.item
-            label="AXIS_1+ (Left stick: tilt forward)"
-            name="AXIS_1+"
-            value="AXIS_1+"/>
+            label="AXIS_3 (Right stick: tilt forward/back)"
+            name="AXIS_3"
+            value="AXIS_3"/>
         <combo_box.item
-            label="AXIS_2- (Right stick: tilt right)"
-            name="AXIS_2-"
-            value="AXIS_2-"/>
+            label="AXIS_4 (Left trigger: push/release)"
+            name="AXIS_4"
+            value="AXIS_4"/>
         <combo_box.item
-            label="AXIS_2+ (Right stick: tilt left)"
-            name="AXIS_2+"
-            value="AXIS_2+"/>
-        <combo_box.item
-            label="AXIS_3- (Right stick: tilt back)"
-            name="AXIS_3-"
-            value="AXIS_3-"/>
-        <combo_box.item
-            label="AXIS_3+ (Right stick: tilt forward)"
-            name="AXIS_3+"
-            value="AXIS_3+"/>
-        <combo_box.item
-            label="AXIS_4- (Left trigger: release)"
-            name="AXIS_4-"
-            value="AXIS_4-"/>
-        <combo_box.item
-            label="AXIS_4+ (Left trigger: push)"
-            name="AXIS_4+"
-            value="AXIS_4+"/>
-        <combo_box.item
-            label="AXIS_5- (Right trigger: release)"
-            name="AXIS_5-"
-            value="AXIS_5-"/>
-        <combo_box.item
-            label="AXIS_5+ (Right trigger: push)"
-            name="AXIS_5+"
-            value="AXIS_5+"/>
+            label="AXIS_5 (Right trigger: push/release)"
+            name="AXIS_5"
+            value="AXIS_5"/>
         <combo_box.item
             label="NONE (No mapping)"
             name="NONE"

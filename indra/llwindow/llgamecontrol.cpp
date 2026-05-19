@@ -205,8 +205,7 @@ std::string LLGameControl::InputChannel::getLocalName() const
 
     if (isAxis() && mIndex < NUM_AXES)
     {
-        return "AXIS_" + std::to_string((U32)mIndex) +
-            (mSign < 0 ? "-" : mSign > 0 ? "+" : "");
+        return "AXIS_" + std::to_string((U32)mIndex);
     }
 
     if (isButton() && mIndex < NUM_BUTTONS)
@@ -215,6 +214,16 @@ std::string LLGameControl::InputChannel::getLocalName() const
     }
 
     return "NONE";
+}
+
+std::string LLGameControl::InputChannel::getSignedLocalName() const
+{
+    std::string name = getLocalName();
+    if (isAxis() && mIndex < NUM_AXES)
+    {
+        name.append(mSign < 0 ? "-" : mSign > 0 ? "+" : "");
+    }
+    return name;
 }
 
 std::string LLGameControl::InputChannel::getRemoteName() const

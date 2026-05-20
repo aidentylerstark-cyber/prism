@@ -3959,18 +3959,12 @@ bool LLInventoryModel::loadFromFile(const std::string& filename,
                         const LLAssetType::EType item_type = inv_item->getType();
                         if (item_type == LLAssetType::AT_UNKNOWN)
                         {
-                            LL_DEBUGS(LOG_INV) << "Ignoring inventory with null item id: " << inv_item->getName() << LL_ENDL;
+                            LL_DEBUGS(LOG_INV) << "Ignoring item with unknown type: " << inv_item->getName() << LL_ENDL;
+                            cats_to_update.insert(inv_item->getParentUUID());
                         }
                         else
                         {
-                            if (inv_item->getType() == LLAssetType::AT_UNKNOWN)
-                            {
-                                cats_to_update.insert(inv_item->getParentUUID());
-                            }
-                            else
-                            {
-                                items.push_back(inv_item);
-                            }
+                            items.push_back(inv_item);
                         }
                     }
 

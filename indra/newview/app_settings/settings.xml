@@ -3296,11 +3296,11 @@
       <key>Comment</key>
       <string>Force viewer to skip legacy login inventory skeleton and rely on async AIS fetching.</string>
       <key>Persist</key>
-      <integer>1</integer>
+      <integer>0</integer>
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>1</integer>
+      <integer>0</integer>
     </map>
     <key>AsyncInventoryMaxConcurrentFetches</key>
     <map>

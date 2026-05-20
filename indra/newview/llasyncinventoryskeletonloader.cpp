@@ -582,8 +582,8 @@ void LLAsyncInventorySkeletonLoader::markComplete()
     disconnectCapsCallback();
     removeIdleCallback();
     mPhase = Phase::Complete;
-    mFetchTimer.stop();
-    mTotalTimer.stop();
+    mFetchTimer.pause();
+    mTotalTimer.pause();
     LL_DEBUGS("AppInit") << "Async inventory skeleton loader finished in "
                          << mTotalTimer.getElapsedTimeF32() << " seconds." << LL_ENDL;
 }
@@ -594,8 +594,8 @@ void LLAsyncInventorySkeletonLoader::markFailed(const std::string& reason)
     removeIdleCallback();
     mFailureReason = reason;
     mPhase = Phase::Failed;
-    mFetchTimer.stop();
-    mTotalTimer.stop();
+    mFetchTimer.pause();
+    mTotalTimer.pause();
     if (mEssentialReady)
     {
         LL_WARNS("AppInit") << "Async inventory skeleton loader failed after essential-ready: " << mFailureReason << LL_ENDL;

@@ -937,8 +937,11 @@ const LLUUID LLInventoryModel::findCategoryUUIDForTypeInRoot(
         // to createCommonSystemCategories or server should
         // have set it
         llassert(!isInventoryUsable());
-        LL_WARNS(LOG_INV) << "Tried to find folder, type " << preferred_type
-                                  << " but category does not exist" << LL_ENDL;
+        if (!mAllowAsyncInventoryUpdates)
+        {
+            LL_WARNS(LOG_INV) << "Tried to find folder, type " << preferred_type
+                                      << " but category does not exist" << LL_ENDL;
+        }
     }
     return rv;
 }
@@ -2649,7 +2652,8 @@ void LLInventoryModel::addItem(LLViewerInventoryItem* item)
         if (item->getIsBrokenLink())
         {
             if (item->getAssetUUID().notNull()
-                && LLInventoryModelBackgroundFetch::getInstance()->folderFetchActive())
+                && (LLInventoryModelBackgroundFetch::getInstance()->folderFetchActive()
+                    || mAllowAsyncInventoryUpdates))
             {
                 // Schedule this link for a recheck as inventory gets loaded
                 // Todo: expand to cover not just an initial fetch
@@ -3698,7 +3702,7 @@ void LLInventoryModel::setAsyncInventoryLoading(bool in_progress)
         mAsyncNotifyPending = false;
     }
 
-    LL_DEBUGS(LOG_INV) << "Async skeleton loading " << (in_progress ? "enabled" : "disabled") << LL_ENDL;
+    LL_INFOS(LOG_INV) << "Async inventory loading " << (in_progress ? "enabled" : "disabled") << LL_ENDL;
 }
 
 void LLInventoryModel::rememberCachedCategoryVersion(const LLUUID& id, S32 version)

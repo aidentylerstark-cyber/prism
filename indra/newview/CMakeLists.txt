@@ -740,6 +740,7 @@ set(viewer_SOURCE_FILES
     llwebprofile.cpp
     llwind.cpp
     llwindowlistener.cpp
+    llstatslistener.cpp
     llwlhandlers.cpp
     llworld.cpp
     llworldmap.cpp
@@ -1414,6 +1415,7 @@ set(viewer_HEADER_FILES
     llwebprofile.h
     llwind.h
     llwindowlistener.h
+    llstatslistener.h
     llwlhandlers.h
     llworld.h
     llworldmap.h

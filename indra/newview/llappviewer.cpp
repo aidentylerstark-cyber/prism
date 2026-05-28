@@ -3310,6 +3310,43 @@ void LLAppViewer::writeDebugInfo(bool isStatic)
              :  LLSDSerialize::toPrettyXML(gDebugInfo["Dynamic"], out_file);
 }
 
+std::string LLAppViewer::getSimulatorFeaturesString(const LLSD& features,
+                                                    const std::string& indent) const
+{
+    std::ostringstream out;
+    for (LLSD::map_const_iterator it = features.beginMap(), end = features.endMap();
+         it != end; ++it)
+    {
+        const LLSD& value = it->second;
+        if (value.isMap())
+        {
+            out << indent << it->first << ":\n";
+            out << getSimulatorFeaturesString(value, indent + "  ");
+        }
+        else if (value.isArray())
+        {
+            out << indent << it->first << ":\n";
+            for (LLSD::array_const_iterator ai = value.beginArray(),
+                 aend = value.endArray(); ai != aend; ++ai)
+            {
+                out << indent << "  " << ai->asString() << "\n";
+            }
+        }
+        else if (value.isBoolean())
+        {
+            if (value.asBoolean())
+            {
+                out << indent << it->first << "\n";
+            }
+        }
+        else
+        {
+            out << indent << it->first << ": " << value.asString() << "\n";
+        }
+    }
+    return out.str();
+}
+
 LLSD LLAppViewer::getViewerInfo() const
 {
     // The point of having one method build an LLSD info block and the other
@@ -3506,6 +3543,19 @@ LLSD LLAppViewer::getViewerInfo() const
         info["PACKETS_PCT"] = 100.f*info["PACKETS_LOST"].asReal() / info["PACKETS_IN"].asReal();
     }
 
+    // Simulator features reported by the server for the current region
+    if (region && region->simulatorFeaturesReceived())
+    {
+        LLSD sim_features;
+        region->getSimulatorFeatures(sim_features);
+        std::string features = getSimulatorFeaturesString(sim_features, "");
+        if (!features.empty())
+        {
+            // keep the trailing newline so a blank line follows the listing
+            info["SIMULATOR_FEATURES"] = features;
+        }
+    }
+
     if (mServerReleaseNotesURL.empty())
     {
         if (gAgent.getRegion())
@@ -3595,6 +3645,10 @@ std::string LLAppViewer::getViewerInfoString(bool default_string) const
     if (info.has("COMPILER"))
     {
         support << "\n" << LLTrans::getString("AboutCompiler", args, default_string);
+    }
+    if (info.has("SIMULATOR_FEATURES"))
+    {
+        support << "\n\n" << LLTrans::getString("AboutSimulatorFeatures", args, default_string);
     }
     if (info.has("PACKETS_IN"))
     {

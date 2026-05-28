@@ -314,6 +314,10 @@ private:
 
     void writeSystemInfo(); // Write system info to "debug_info.log"
 
+    // Recursively format enabled simulator features as an indented, newline-separated list.
+    std::string getSimulatorFeaturesString(const LLSD& features,
+                                           const std::string& indent) const;
+
     void processMarkerFiles();
     static void recordMarkerVersion(LLAPRFile& marker_file);
     bool markerIsSameVersion(const std::string& marker_name) const;

@@ -1138,47 +1138,6 @@ namespace
         return (S32)(cur_ptr - start_loc);
     }
 
-    /// Packs the default value of a 1-byte TextureEntry field in a way that allows
-    /// the receiving side to unambiguously determine the "number of faces" for the
-    /// TextureEntry.
-    ///
-    /// @param cur_ptr Destination buffer for packed data.
-    /// @param data_ptr Source array of field values.
-    /// @param last_face_index Index of the last face.
-    /// @param type Informs htolememcpy() how to copy bytes to wire format.
-    /// @return Number of bytes written to the buffer.
-    S32 pack_TE_facecount(U8 *cur_ptr, U8 *data_ptr, U8 last_face_index, EMsgVariableType type)
-    {
-        // BUG: There can be a discrepancy in last_face_index as known to client and server
-        // (for mesh objects).
-        //
-        // WORKAROUND: We can inform the other side of our notion of last_face_index by
-        // re-packing the TE value of the last_face_index as an exception to the default.
-        // This is effectively a no-op since the value at last_face_index is, by protocol
-        // definition, the default (see implementation of the packing/unpacking algorithm
-        // in pack_TE_field() or unpack_TE_field() for details), however the receiving
-        // side will notice and interpret this as a declaration the number of faces.
-
-        U8 *start_loc = cur_ptr;
-        if (last_face_index > 0)
-        {
-            // The workaround need only be packed once for any particular update, so it is
-            // always done for a TE field whose data_size is 1 byte.
-            //
-            U8 data_size = 1;
-
-            // store a variable bitfield whose only bit corresponds to last_face_index
-            U64 bits = (U64)1 << last_face_index;
-            cur_ptr = pack_TE_variable_bitfield(cur_ptr, bits);
-
-            // pack the value
-            htolememcpy(cur_ptr, data_ptr + (last_face_index * data_size), type, data_size);
-            cur_ptr += data_size;
-        }
-
-        return (S32)(cur_ptr - start_loc);
-    }
-
     /// Unpacks TextureEntry data encoded for wire transport.
     ///
     /// @param dest Array where unpacked values will be stored.
@@ -1262,7 +1221,7 @@ namespace
 
             // Store the value in the array at the flagged indices
             U8 i = 0;
-            while (index_flags > 0)
+            while (index_flags > 0 && i < LLTEContents::MAX_TES)
             {
                 if (index_flags & 0x01)
                 {
@@ -1272,10 +1231,14 @@ namespace
                 i++;
             }
 
-            // update min_num_faces
-            if (i > min_num_faces)
+            // The packer thought there are at least i+1 faces since otherwise it wouldn't have packed
+            // any info past the "default value".
+            if (i >= min_num_faces)
             {
-                min_num_faces = i;
+                // HACK: we track the max number of possible faces based on what was packed.
+                // We may decide to update our own notion of actual faces later if this is for
+                // a mesh object.
+                min_num_faces = i + 1;
             }
         }
         return true;
@@ -1414,24 +1377,8 @@ S32 LLPrimitive::unpackTEMessageInternal(LLTEContents& tec)
 
     // BUG: server and client may disagree as to the face_count on a mesh Primitive.
     //
-    // HISTORY: In the beginning face_count of a Primitive was implicit according to
-    // its VolumeParams hence the face_count was not encoded in TE field data. Later
-    // "mesh" Primitives (aka "Scuplties") were added but had only one face. Then
-    // non-Sculpty mesh Primitives were added with variable face_count (up to 8) and
-    // multiple LOD, each with a potentially different face_count, and for several
-    // years the mesh asset upload pipeline suffered a bug where the server-side mesh
-    // asset would cache the face_count of lower-LOD collision shape rather than of
-    // the mesh at full glory. The result was: texture adjustments to unknown mesh
-    // faces would silently fail at the server. There was a similar client side-problem
-    // when mesh objects are loaded with low LOD shapes and server updates for missing
-    // faces are silently dropped.
-    //
-    // WORKAROUND: face_count as known to each side can be encoded in the TE field
-    // data without adjusting protocol using a trick (see pack_TE_facecount() for
-    // details).
-    //
-    // TLDR: This is where we adjust our notion of mesh face_count when it is smaller
-    // than that of the other side.
+    // WORKAROUND: when the server data suggests the mesh object has more faces than we know about
+    // we will accept the server's value.
     if (mVolumep && mVolumep->getParams().isMeshSculpt())
     {
         U8 num_tes = getNumTEs();
@@ -1596,11 +1543,6 @@ U8* LLPrimitive::packTEMessageInternal(U8* cur_ptr) const
     cur_ptr += pack_TE_field(cur_ptr, (U8 *)image_rot, 2 ,last_face_index, MVT_S16Array);
     *cur_ptr++ = 0;
     cur_ptr += pack_TE_field(cur_ptr, (U8 *)bump, 1 ,last_face_index, MVT_U8);
-    if (mVolumep && mVolumep->getParams().isMeshSculpt())
-    {
-        // workaround for historical num_faces discrepancy between client and server
-        cur_ptr += pack_TE_facecount(cur_ptr, (U8 *)bump, last_face_index, MVT_U8);
-    }
     *cur_ptr++ = 0;
     cur_ptr += pack_TE_field(cur_ptr, (U8 *)media_flags, 1 ,last_face_index, MVT_U8);
     *cur_ptr++ = 0;

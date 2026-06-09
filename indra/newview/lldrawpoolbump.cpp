@@ -907,9 +907,10 @@ void LLBumpImageList::onSourceUpdated(LLViewerTexture* src, EBumpEffect bump_cod
 
         LLImageGL::setManualImage(GL_TEXTURE_2D, 0, dst_img->getPrimaryFormat(), dst_img->getWidth(), dst_img->getHeight(), GL_RGBA, GL_UNSIGNED_BYTE, nullptr, false);
 
-        LLGLuint tex_name = dst_img->getTexName();
+        // Guard holds the lease across the setColorAttachment.
+        auto guard = dst_img->getTexName();
         // point render target at empty buffer
-        sRenderTarget.setColorAttachment(bump->getGLTexture(), tex_name);
+        sRenderTarget.setColorAttachment(bump->getGLTexture(), guard.get());
 
         // generate normal map in empty texture
         {

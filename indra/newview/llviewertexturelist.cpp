@@ -121,7 +121,7 @@ void LLViewerTextureList::doPreloadImages()
 
     // Set the "white" image
     LLViewerFetchedTexture::sWhiteImagep = LLViewerTextureManager::getFetchedTextureFromFile("white.tga", FTT_LOCAL_FILE, MIPMAP_NO, LLViewerFetchedTexture::BOOST_UI);
-    LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName();
+    LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName().get();
     LLUIImageList* image_list = LLUIImageList::getInstance();
 
     // Set default particle texture
@@ -1178,7 +1178,7 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
         // Give mDownResMap a parent on the RT stack so its flush below pops
         // back to the swap chain image instead of falling off the bottom.
         // This pump can be called from idle() (no parent bound) or from
-        // display() (swap chain image already bound) — only wrap when the
+        // display() (swap chain image already bound) -- only wrap when the
         // stack is empty.
         LLSwapChain& dr_sc = LLAppViewer::instance()->getSwapChain();
         bool dr_sc_bound = false;

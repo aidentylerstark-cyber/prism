@@ -210,7 +210,8 @@ void LLPostProcess::applyShaders(void)
         /// If any of the above shaders have been called update the frame buffer;
         if (tweaks.useColorFilter())
         {
-            U32 tex = mSceneRenderTexture->getTexName() ;
+            auto guard = mSceneRenderTexture->getTexName();
+            U32 tex = guard.get();
             copyFrameBuffer(tex, screenW, screenH);
         }
         applyNightVisionShader();
@@ -220,7 +221,8 @@ void LLPostProcess::applyShaders(void)
         /// If any of the above shaders have been called update the frame buffer;
         if (tweaks.useColorFilter().asBoolean() || tweaks.useNightVisionShader().asBoolean())
         {
-            U32 tex = mSceneRenderTexture->getTexName() ;
+            auto guard = mSceneRenderTexture->getTexName();
+            U32 tex = guard.get();
             copyFrameBuffer(tex, screenW, screenH);
         }
         applyBloomShader();
@@ -301,7 +303,8 @@ void LLPostProcess::doEffects(void)
 
     /// Copy the screen buffer to the render texture
     {
-        U32 tex = mSceneRenderTexture->getTexName() ;
+        auto guard = mSceneRenderTexture->getTexName();
+        U32 tex = guard.get();
         copyFrameBuffer(tex, screenW, screenH);
     }
 
@@ -370,7 +373,7 @@ void LLPostProcess::createTexture(LLPointer<LLImageGL>& texture, unsigned int wi
     texture = new LLImageGL(false) ;
     if(texture->createGLTexture())
     {
-        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, texture->getTexName());
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, texture->getTexName().get());
         glTexImage2D(GL_TEXTURE_RECTANGLE, 0, 4, width, height, 0,
             GL_RGBA, GL_UNSIGNED_BYTE, &data[0]);
         gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
@@ -390,7 +393,7 @@ void LLPostProcess::createNoiseTexture(LLPointer<LLImageGL>& texture)
     texture = new LLImageGL(false) ;
     if(texture->createGLTexture())
     {
-        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, texture->getTexName());
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, texture->getTexName().get());
         LLImageGL::setManualImage(GL_TEXTURE_2D, 0, GL_LUMINANCE, NOISE_SIZE, NOISE_SIZE, GL_LUMINANCE, GL_UNSIGNED_BYTE, &buffer[0]);
         gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
         gGL.getTexUnit(0)->setTextureAddressMode(LLTexUnit::TAM_WRAP);

@@ -216,7 +216,7 @@ S8  LLGLTexture::getComponents() const
     return mGLTexturep->getComponents() ;
 }
 
-LLGLuint LLGLTexture::getTexName() const
+LLScopedTexName LLGLTexture::getTexName() const
 {
     llassert(mGLTexturep.notNull()) ;
 

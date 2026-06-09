@@ -196,22 +196,45 @@ void LLTexUnit::bindFast(LLTexture* texture)
     texture->setActive();
     glActiveTexture(GL_TEXTURE0 + mIndex);
     gGL.mCurrTextureUnitIndex = mIndex;
-    mCurrTexture = gl_tex->getTexName();
-    if (!mCurrTexture)
+
+    bool needs_default = false;
+    {
+        auto guard = gl_tex->getTexName();
+        mCurrTexture = guard.get();
+        if (!mCurrTexture)
+        {
+            needs_default = true;
+        }
+        else
+        {
+            glBindTexture(sGLTextureType[gl_tex->getTarget()], mCurrTexture);
+            mHasMipMaps = gl_tex->mHasMipMaps;
+            if (gl_tex->mTexOptionsDirty)
+            {
+                gl_tex->mTexOptionsDirty = false;
+                setTextureAddressModeFast(gl_tex->mAddressMode, gl_tex->getTarget());
+                setTextureFilteringOptionFast(gl_tex->mFilterOption, gl_tex->getTarget());
+            }
+        }
+    }
+    if (needs_default)
     {
         LL_PROFILE_ZONE_NAMED("MISSING TEXTURE");
         //if deleted, will re-generate it immediately
+        // No lease here -- re-entrant calls take their own unique. Trailing
+        // glBindTexture uses whatever mCurrTexture bindDefaultImage left,
+        // same as pre-lease.
         texture->forceImmediateUpdate();
         gl_tex->forceUpdateBindStats();
         texture->bindDefaultImage(mIndex);
-    }
-    glBindTexture(sGLTextureType[gl_tex->getTarget()], mCurrTexture);
-    mHasMipMaps = gl_tex->mHasMipMaps;
-    if (gl_tex->mTexOptionsDirty)
-    {
-        gl_tex->mTexOptionsDirty = false;
-        setTextureAddressModeFast(gl_tex->mAddressMode, gl_tex->getTarget());
-        setTextureFilteringOptionFast(gl_tex->mFilterOption, gl_tex->getTarget());
+        glBindTexture(sGLTextureType[gl_tex->getTarget()], mCurrTexture);
+        mHasMipMaps = gl_tex->mHasMipMaps;
+        if (gl_tex->mTexOptionsDirty)
+        {
+            gl_tex->mTexOptionsDirty = false;
+            setTextureAddressModeFast(gl_tex->mAddressMode, gl_tex->getTarget());
+            setTextureFilteringOptionFast(gl_tex->mFilterOption, gl_tex->getTarget());
+        }
     }
 }
 
@@ -227,35 +250,49 @@ bool LLTexUnit::bind(LLTexture* texture, bool for_rendering, bool forceBind)
 
         if (texture != NULL && (gl_tex = texture->getGLTexture()))
         {
-            if (gl_tex->getTexName()) //if texture exists
+            bool needs_default = false;
+            bool did_bind = false;
             {
-                //in audit, replace the selected texture by the default one.
-                if ((mCurrTexture != gl_tex->getTexName()) || forceBind)
+                // Guard scoped to texname read + glBindTexture only.
+                // Drop before updateBindStats (it takes its own shared lease).
+                auto guard = gl_tex->getTexName();
+                U32 texname = guard.get();
+                if (texname)
                 {
-                    activate();
-                    enable(gl_tex->getTarget());
-                    mCurrTexture = gl_tex->getTexName();
-                    glBindTexture(sGLTextureType[gl_tex->getTarget()], mCurrTexture);
-                    if(gl_tex->updateBindStats())
+                    if ((mCurrTexture != texname) || forceBind)
                     {
-                        texture->setActive() ;
-                        texture->updateBindStatsForTester() ;
-                    }
-                    mHasMipMaps = gl_tex->mHasMipMaps;
-                    if (gl_tex->mTexOptionsDirty)
-                    {
-                        gl_tex->mTexOptionsDirty = false;
-                        setTextureAddressMode(gl_tex->mAddressMode);
-                        setTextureFilteringOption(gl_tex->mFilterOption);
+                        activate();
+                        enable(gl_tex->getTarget());
+                        mCurrTexture = texname;
+                        glBindTexture(sGLTextureType[gl_tex->getTarget()], mCurrTexture);
+                        did_bind = true;
                     }
                 }
+                else
+                {
+                    needs_default = true;
+                }
             }
-            else
+            if (did_bind)
+            {
+                if (gl_tex->updateBindStats())
+                {
+                    texture->setActive();
+                    texture->updateBindStatsForTester();
+                }
+                mHasMipMaps = gl_tex->mHasMipMaps;
+                if (gl_tex->mTexOptionsDirty)
+                {
+                    gl_tex->mTexOptionsDirty = false;
+                    setTextureAddressMode(gl_tex->mAddressMode);
+                    setTextureFilteringOption(gl_tex->mFilterOption);
+                }
+            }
+            if (needs_default)
             {
                 //if deleted, will re-generate it immediately
-                texture->forceImmediateUpdate() ;
-
-                gl_tex->forceUpdateBindStats() ;
+                texture->forceImmediateUpdate();
+                gl_tex->forceUpdateBindStats();
                 return texture->bindDefaultImage(mIndex);
             }
         }
@@ -284,36 +321,53 @@ bool LLTexUnit::bind(LLImageGL* texture, bool for_rendering, bool forceBind, S32
 {
     stop_glerror();
     if (mIndex < 0) return false;
+    if (!texture) return false;
 
-    U32 texname = usename ? usename : texture->getTexName();
-
-    if(!texture)
+    U32 texname = 0;
+    bool did_bind = false;
     {
-        LL_DEBUGS() << "NULL LLTexUnit::bind texture" << LL_ENDL;
+        // Guard scoped to texname read + glBindTexture only. Internal
+        // updateBindStats below takes its own shared lease -- can't nest.
+        auto guard = texture->getTexName();
+        texname = usename ? usename : guard.get();
+
+        if (!texname)
+        {
+            // Fall through to the default-texture path; guard drops first.
+        }
+        else if ((mCurrTexture != texname) || forceBind)
+        {
+            gGL.flush();
+            stop_glerror();
+            activate();
+            stop_glerror();
+            enable(texture->getTarget());
+            stop_glerror();
+            mCurrTexture = texname;
+            glBindTexture(sGLTextureType[texture->getTarget()], mCurrTexture);
+            stop_glerror();
+            did_bind = true;
+        }
+    }
+
+    if (!texname)
+    {
+        bool default_has_name = false;
+        if (LLImageGL::sDefaultGLTexture)
+        {
+            auto default_guard = LLImageGL::sDefaultGLTexture->getTexName();
+            default_has_name = default_guard.get() != 0;
+        }
+        if (default_has_name)
+        {
+            return bind(LLImageGL::sDefaultGLTexture);
+        }
+        stop_glerror();
         return false;
     }
 
-    if(!texname)
+    if (did_bind)
     {
-        if(LLImageGL::sDefaultGLTexture && LLImageGL::sDefaultGLTexture->getTexName())
-        {
-            return bind(LLImageGL::sDefaultGLTexture) ;
-        }
-        stop_glerror();
-        return false ;
-    }
-
-    if ((mCurrTexture != texname) || forceBind)
-    {
-        gGL.flush();
-        stop_glerror();
-        activate();
-        stop_glerror();
-        enable(texture->getTarget());
-        stop_glerror();
-        mCurrTexture = texname;
-        glBindTexture(sGLTextureType[texture->getTarget()], mCurrTexture);
-        stop_glerror();
         texture->updateBindStats();
         mHasMipMaps = texture->mHasMipMaps;
         if (texture->mTexOptionsDirty)
@@ -327,7 +381,6 @@ bool LLTexUnit::bind(LLImageGL* texture, bool for_rendering, bool forceBind, S32
     }
 
     stop_glerror();
-
     return true;
 }
 
@@ -343,28 +396,33 @@ bool LLTexUnit::bind(LLCubeMap* cubeMap)
         return false;
     }
 
-    if (mCurrTexture != cubeMap->mImages[0]->getTexName())
+    bool changed = false;
     {
-        if (LLCubeMap::sUseCubeMaps)
+        auto guard = cubeMap->mImages[0]->getTexName();
+        U32 texname = guard.get();
+        if (mCurrTexture != texname)
         {
+            if (!LLCubeMap::sUseCubeMaps)
+            {
+                LL_WARNS() << "Using cube map without extension!" << LL_ENDL;
+                return false;
+            }
             activate();
             enable(LLTexUnit::TT_CUBE_MAP);
-            mCurrTexture = cubeMap->mImages[0]->getTexName();
+            mCurrTexture = texname;
             glBindTexture(GL_TEXTURE_CUBE_MAP, mCurrTexture);
             mHasMipMaps = cubeMap->mImages[0]->mHasMipMaps;
-            cubeMap->mImages[0]->updateBindStats();
-            if (cubeMap->mImages[0]->mTexOptionsDirty)
-            {
-                cubeMap->mImages[0]->mTexOptionsDirty = false;
-                setTextureAddressMode(cubeMap->mImages[0]->mAddressMode);
-                setTextureFilteringOption(cubeMap->mImages[0]->mFilterOption);
-            }
-            return true;
+            changed = true;
         }
-        else
+    }
+    if (changed)
+    {
+        cubeMap->mImages[0]->updateBindStats();
+        if (cubeMap->mImages[0]->mTexOptionsDirty)
         {
-            LL_WARNS() << "Using cube map without extension!" << LL_ENDL;
-            return false;
+            cubeMap->mImages[0]->mTexOptionsDirty = false;
+            setTextureAddressMode(cubeMap->mImages[0]->mAddressMode);
+            setTextureFilteringOption(cubeMap->mImages[0]->mFilterOption);
         }
     }
     return true;
@@ -385,7 +443,8 @@ bool LLTexUnit::bind(LLRenderTarget* renderTarget, bool bindDepth)
     }
     else
     {
-        bindManual(renderTarget->getUsage(), renderTarget->getTexture());
+        auto guard = renderTarget->getTexture();
+        bindManual(renderTarget->getUsage(), guard.get());
     }
 
     return true;

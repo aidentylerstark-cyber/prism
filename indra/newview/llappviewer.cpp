@@ -1503,8 +1503,8 @@ bool LLAppViewer::doFrame()
                     // the swap chain image around the calls so they pop back
                     // to it instead of tripping the missing-parent assert in
                     // LLRenderTarget::flush(). Only wrap when the stack is
-                    // empty — these updaters can recurse into display() (e.g.
-                    // snapshot live preview → rawSnapshot → display) which
+                    // empty -- these updaters can recurse into display() (e.g.
+                    // snapshot live preview -> rawSnapshot -> display) which
                     // may bring its own parent.
                     bool sc_bound = false;
                     if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
@@ -2061,7 +2061,7 @@ bool LLAppViewer::cleanup()
 
     LL_INFOS() << "Shutting down OpenGL" << LL_ENDL;
 
-    // Drop the swap chain before window teardown — its images are bound to
+    // Drop the swap chain before window teardown -- its images are bound to
     // the OS window and must not outlive it.
     mSwapChain.release();
 

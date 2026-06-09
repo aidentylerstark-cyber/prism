@@ -158,7 +158,7 @@ void display_startup()
     //
     if (!LLViewerFetchedTexture::sWhiteImagep.isNull())
     {
-    LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName();
+        LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName().get();
     }
 
     LLGLSDefault gls_default;
@@ -433,7 +433,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         gGL.flush();
         // Route the resize-skip black clear through the swap chain so we
         // don't reach for FBO 0 here either. Only run when no other RT is on
-        // the stack — snapshots set their own bottom-of-stack target.
+        // the stack -- snapshots set their own bottom-of-stack target.
         LLSwapChain& sc = LLAppViewer::instance()->getSwapChain();
         if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
         {
@@ -715,9 +715,9 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     //
 
     // Bind the OS window's presentation image as the bottom of the render
-    // target stack for this frame. Everything downstream — dynamic-texture
+    // target stack for this frame. Everything downstream -- dynamic-texture
     // updates, pipeline G-buffers, lighting, post-proc ping-pongs,
-    // renderFinalize's fullscreen triangle, and the UI — sits on top of this
+    // renderFinalize's fullscreen triangle, and the UI -- sits on top of this
     // in the LLRenderTarget stack and pops back to it on flush. swap()
     // flushes the image and calls present(). Snapshot renders go to their
     // own off-screen target, so we skip the bind in that case.
@@ -804,7 +804,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLDrawable::incrementVisible();
 
         LLSpatialGroup::sNoDelete = true;
-        LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName();
+        LLTexUnit::sWhiteTexture = LLViewerFetchedTexture::sWhiteImagep->getTexName().get();
 
         S32 occlusion = LLPipeline::sUseOcclusion;
         if (gDepthDirty)

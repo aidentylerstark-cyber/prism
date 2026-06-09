@@ -41,7 +41,7 @@ class LLWindow;
 // GL backend (today): the chain holds N off-screen color+depth FBOs sized to
 // the window. acquireNextImage() rotates the index. present() blits the
 // current image's color to FBO 0 and calls swapBuffers(). The literal 0
-// only appears inside present() — viewer code never names it.
+// only appears inside present() -- viewer code never names it.
 //
 // Vulkan / OpenXR backends (future): mImages map onto the runtime's actual
 // swap chain images; acquireNextImage / present become the real WSI calls
@@ -77,7 +77,7 @@ public:
     // readback consumers that want the in-progress frame.
     LLRenderTarget& getCurrentImage();
 
-    // Most recently presented image — i.e. the one whose contents are on
+    // Most recently presented image -- i.e. the one whose contents are on
     // screen right now. Useful for consumers (scene monitor) that want the
     // last visible frame rather than the half-rendered current one.
     LLRenderTarget& getPreviousImage();

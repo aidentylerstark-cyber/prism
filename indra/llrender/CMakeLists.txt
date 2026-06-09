@@ -29,6 +29,7 @@ set(llrender_SOURCE_FILES
     llrendersphere.cpp
     llrendertarget.cpp
     llswapchain.cpp
+    llgpuresource.cpp
     llshadermgr.cpp
     lltexture.cpp
     lltexturemanagerbridge.cpp
@@ -61,6 +62,8 @@ set(llrender_HEADER_FILES
     llrendernavprim.h
     llrendersphere.h
     llswapchain.h
+    llgpuresource.h
+    llresourcelease.h
     llshadermgr.h
     lltexture.h
     lltexturemanagerbridge.h

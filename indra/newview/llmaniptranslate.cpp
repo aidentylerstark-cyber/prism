@@ -142,7 +142,13 @@ U32 LLManipTranslate::getGridTexName()
         restoreGL() ;
     }
 
-    return sGridTex.isNull() ? 0 : sGridTex->getTexName() ;
+    if (sGridTex.isNull())
+    {
+        return 0;
+    }
+    // Snapshot-return: grid texture is a long-lived UI asset; caller doesn't
+    // race with worker uploads here.
+    return sGridTex->getTexName().get();
 }
 
 //static
@@ -171,7 +177,8 @@ void LLManipTranslate::restoreGL()
 
     GLuint* d = new GLuint[rez*rez];
 
-    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, sGridTex->getTexName(), true);
+    auto grid_guard = sGridTex->getTexName();
+    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, grid_guard.get(), true);
     gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_TRILINEAR);
 
     while (rez >= 1)

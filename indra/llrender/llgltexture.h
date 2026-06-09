@@ -30,6 +30,7 @@
 
 #include "lltexture.h"
 #include "llgl.h"
+#include "llgpuresource.h"
 
 class LLImageRaw;
 
@@ -115,7 +116,7 @@ public:
     /*virtual*/S32         getHeight(S32 discard_level = -1) const;
 
     bool       hasGLTexture() const ;
-    LLGLuint   getTexName() const ;
+    LLScopedTexName getTexName() const;
     bool       createGLTexture() ;
 
     // Create a GL Texture from an image raw

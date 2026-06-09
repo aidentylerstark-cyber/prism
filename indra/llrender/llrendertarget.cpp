@@ -75,9 +75,15 @@ LLRenderTarget::~LLRenderTarget()
     release();
 }
 
+// ---------------------------------------------------------------------------
+// Public mutators -- each takes a unique lease and delegates to a _locked
+// helper if it needs to call into another mutator.
+// ---------------------------------------------------------------------------
+
 void LLRenderTarget::resize(U32 resx, U32 resy)
 {
-    //for accounting, get the number of pixels added/subtracted
+    LLUniqueLease lease = getUniqueLease();
+
     S32 pix_diff = (resx*resy)-(mResX*mResY);
 
     mResX = resx;
@@ -86,7 +92,7 @@ void LLRenderTarget::resize(U32 resx, U32 resy)
     llassert(mInternalFormat.size() == mTex.size());
 
     for (U32 i = 0; i < mTex.size(); ++i)
-    { //resize color attachments
+    {
         gGL.getTexUnit(0)->bindManual(mUsage, mTex[i]);
         LLImageGL::setManualImage(LLTexUnit::getInternalType(mUsage), 0, mInternalFormat[i], mResX, mResY, GL_RGBA, GL_UNSIGNED_BYTE, NULL, false);
         sBytesAllocated += pix_diff*4;
@@ -102,17 +108,18 @@ void LLRenderTarget::resize(U32 resx, U32 resy)
     }
 }
 
-
 bool LLRenderTarget::allocate(U32 resx, U32 resy, U32 color_fmt, bool depth, LLTexUnit::eTextureType usage, LLTexUnit::eTextureMipGeneration generateMipMaps)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
     llassert(usage == LLTexUnit::TT_TEXTURE);
     llassert(!isBoundInStack());
 
+    LLUniqueLease lease = getUniqueLease();
+
     resx = llmin(resx, (U32) gGLManager.mGLMaxTextureSize);
     resy = llmin(resy, (U32) gGLManager.mGLMaxTextureSize);
 
-    release();
+    release_locked();
 
     mResX = resx;
     mResY = resy;
@@ -123,15 +130,23 @@ bool LLRenderTarget::allocate(U32 resx, U32 resy, U32 color_fmt, bool depth, LLT
     mGenerateMipMaps = generateMipMaps;
 
     if (mGenerateMipMaps != LLTexUnit::TMG_NONE) {
-        // Calculate the number of mip levels based upon resolution that we should have.
         mMipLevels = 1 + (U32)floor(log10((float)llmax(mResX, mResY)) / log10(2.0));
     }
 
     if (depth)
     {
-        if (!allocateDepth())
+        // Inlined allocateDepth body -- still under our unique lease.
+        LLImageGL::generateTextures(1, &mDepth);
+        gGL.getTexUnit(0)->bindManual(mUsage, mDepth);
+        U32 internal_type = LLTexUnit::getInternalType(mUsage);
+        stop_glerror();
+        clear_glerror();
+        LLImageGL::setManualImage(internal_type, 0, GL_DEPTH_COMPONENT24, mResX, mResY, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL, false);
+        gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_POINT);
+        sBytesAllocated += mResX*mResY*4;
+        if (glGetError() != GL_NO_ERROR)
         {
-            LL_WARNS() << "Failed to allocate depth buffer for render target." << LL_ENDL;
+            LL_WARNS() << "Unable to allocate depth buffer for render target." << LL_ENDL;
             return false;
         }
     }
@@ -147,17 +162,19 @@ bool LLRenderTarget::allocate(U32 resx, U32 resy, U32 color_fmt, bool depth, LLT
         glBindFramebuffer(GL_FRAMEBUFFER, sCurFBO);
     }
 
-    return addColorAttachment(color_fmt);
+    return addColorAttachment_locked(color_fmt);
 }
 
 void LLRenderTarget::setColorAttachment(LLImageGL* img, LLGLuint use_name)
 {
     LL_PROFILE_ZONE_SCOPED;
-    llassert(img != nullptr); // img must not be null
-    llassert(sUseFBO); // FBO support must be enabled
-    llassert(mDepth == 0); // depth buffers not supported with this mode
-    llassert(mTex.empty()); // mTex must be empty with this mode (binding target should be done via LLImageGL)
+    llassert(img != nullptr);
+    llassert(sUseFBO);
+    llassert(mDepth == 0);
+    llassert(mTex.empty());
     llassert(!isBoundInStack());
+
+    LLUniqueLease lease = getUniqueLease();
 
     if (mFBO == 0)
     {
@@ -168,9 +185,12 @@ void LLRenderTarget::setColorAttachment(LLImageGL* img, LLGLuint use_name)
     mResY = img->getHeight();
     mUsage = img->getTarget();
 
+    // Guarded read on img (different LLGPUResource, different mutex -- safe).
+    LLScopedTexName guard;
     if (use_name == 0)
     {
-        use_name = img->getTexName();
+        guard = img->getTexName();
+        use_name = guard.get();
     }
 
     mTex.push_back(use_name);
@@ -189,8 +209,10 @@ void LLRenderTarget::releaseColorAttachment()
 {
     LL_PROFILE_ZONE_SCOPED;
     llassert(!isBoundInStack());
-    llassert(mTex.size() == 1); //cannot use releaseColorAttachment with LLRenderTarget managed color targets
-    llassert(mFBO != 0);  // mFBO must be valid
+    llassert(mTex.size() == 1);
+    llassert(mFBO != 0);
+
+    LLUniqueLease lease = getUniqueLease();
 
     glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, LLTexUnit::getInternalType(mUsage), 0, 0);
@@ -204,6 +226,12 @@ bool LLRenderTarget::addColorAttachment(U32 color_fmt)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
     llassert(!isBoundInStack());
 
+    LLUniqueLease lease = getUniqueLease();
+    return addColorAttachment_locked(color_fmt);
+}
+
+bool LLRenderTarget::addColorAttachment_locked(U32 color_fmt)
+{
     if (color_fmt == 0)
     {
         return true;
@@ -229,7 +257,6 @@ bool LLRenderTarget::addColorAttachment(U32 color_fmt)
 
     stop_glerror();
 
-
     {
         clear_glerror();
         LLImageGL::setManualImage(LLTexUnit::getInternalType(mUsage), 0, color_fmt, mResX, mResY, GL_RGBA, GL_UNSIGNED_BYTE, NULL, false);
@@ -244,14 +271,13 @@ bool LLRenderTarget::addColorAttachment(U32 color_fmt)
 
     stop_glerror();
 
-
     if (offset == 0)
-    { //use bilinear filtering on single texture render targets that aren't multisampled
+    {
         gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
         stop_glerror();
     }
     else
-    { //don't filter data attachments
+    {
         gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_POINT);
         stop_glerror();
     }
@@ -284,10 +310,9 @@ bool LLRenderTarget::addColorAttachment(U32 color_fmt)
 
     if (gDebugGL)
     { //bind and unbind to validate target
-        bindTarget();
-        flush();
+        bindTarget_locked();
+        flush_locked();
     }
-
 
     return true;
 }
@@ -295,6 +320,8 @@ bool LLRenderTarget::addColorAttachment(U32 color_fmt)
 bool LLRenderTarget::allocateDepth()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    LLUniqueLease lease = getUniqueLease();
+
     LLImageGL::generateTextures(1, &mDepth);
     gGL.getTexUnit(0)->bindManual(mUsage, mDepth);
 
@@ -318,6 +345,11 @@ bool LLRenderTarget::allocateDepth()
 void LLRenderTarget::shareDepthBuffer(LLRenderTarget& target)
 {
     llassert(!isBoundInStack());
+
+    // Two-resource lock: acquire this then target -- consistent order across
+    // all callers prevents lock-order inversion. (Only one such method.)
+    LLUniqueLease lease_this = getUniqueLease();
+    LLUniqueLease lease_other = target.getUniqueLease();
 
     if (!mFBO || !target.mFBO)
     {
@@ -353,6 +385,12 @@ void LLRenderTarget::release()
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
     llassert(!isBoundInStack());
 
+    LLUniqueLease lease = getUniqueLease();
+    release_locked();
+}
+
+void LLRenderTarget::release_locked()
+{
     mIsSwapChainImage = false;
 
     if (mDepth)
@@ -368,7 +406,7 @@ void LLRenderTarget::release()
         glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
 
         if (mUseDepth)
-        { //detach shared depth buffer
+        {
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, LLTexUnit::getInternalType(mUsage), 0, 0);
             mUseDepth = false;
         }
@@ -376,8 +414,6 @@ void LLRenderTarget::release()
         glBindFramebuffer(GL_FRAMEBUFFER, sCurFBO);
     }
 
-    // Detach any extra color buffers (e.g. SRGB spec buffers)
-    //
     if (mFBO && (mTex.size() > 1))
     {
         glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
@@ -421,17 +457,22 @@ void LLRenderTarget::bindTarget()
     llassert(!isBoundInStack());
     llassert(mFBO);
 
+    LLUniqueLease lease = getUniqueLease();
+    bindTarget_locked();
+}
+
+void LLRenderTarget::bindTarget_locked()
+{
     glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
     sCurFBO = mFBO;
 
-    //setup multiple render targets
     GLenum drawbuffers[] = {GL_COLOR_ATTACHMENT0,
                             GL_COLOR_ATTACHMENT1,
                             GL_COLOR_ATTACHMENT2,
                             GL_COLOR_ATTACHMENT3};
 
     if (mTex.empty())
-    { //no color buffer to draw to
+    {
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
     }
@@ -469,11 +510,13 @@ void LLRenderTarget::clear(U32 mask_in)
 {
     LL_PROFILE_GPU_ZONE("clear");
     llassert(mFBO);
+
+    LLUniqueLease lease = getUniqueLease();
+
     U32 mask = GL_COLOR_BUFFER_BIT;
     if (mUseDepth)
     {
         mask |= GL_DEPTH_BUFFER_BIT;
-
     }
     if (mFBO)
     {
@@ -491,25 +534,38 @@ void LLRenderTarget::clear(U32 mask_in)
     }
 }
 
-U32 LLRenderTarget::getTexture(U32 attachment) const
+LLScopedTexName LLRenderTarget::getTexture(U32 attachment) const
 {
+    LLSharedLease lease = getSharedLease();
     if (attachment >= mTex.size())
     {
         LL_WARNS() << "Invalid attachment index " << attachment << " for size " << mTex.size() << LL_ENDL;
         llassert(false);
-        return 0;
+        return LLScopedTexName(std::move(lease), 0);
     }
-    return mTex[attachment];
+    LLGLuint name = mTex[attachment];
+    return LLScopedTexName(std::move(lease), name);
 }
 
 U32 LLRenderTarget::getNumTextures() const
 {
+    LLSharedLease lease = getSharedLease();
     return static_cast<U32>(mTex.size());
 }
 
 void LLRenderTarget::bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options)
 {
-    gGL.getTexUnit(channel)->bindManual(mUsage, getTexture(index), filter_options == LLTexUnit::TFO_TRILINEAR || filter_options == LLTexUnit::TFO_ANISOTROPIC);
+    LLSharedLease lease = getSharedLease();
+    bindTexture_locked(index, channel, filter_options);
+}
+
+void LLRenderTarget::bindTexture_locked(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options)
+{
+    // Read mTex[index] directly under the caller's lease -- avoids the
+    // same-thread re-entry that calling getTexture() (also takes shared)
+    // would cause.
+    LLGLuint name = (index < mTex.size()) ? mTex[index] : 0;
+    gGL.getTexUnit(channel)->bindManual(mUsage, name, filter_options == LLTexUnit::TFO_TRILINEAR || filter_options == LLTexUnit::TFO_ANISOTROPIC);
     gGL.getTexUnit(channel)->setTextureFilteringOption(filter_options);
 }
 
@@ -521,10 +577,16 @@ void LLRenderTarget::flush()
     llassert(mFBO);
     llassert(sCurFBO == mFBO);
 
+    LLUniqueLease lease = getUniqueLease();
+    flush_locked();
+}
+
+void LLRenderTarget::flush_locked()
+{
     if (mGenerateMipMaps == LLTexUnit::TMG_AUTO)
     {
         LL_PROFILE_GPU_ZONE("rt generate mipmaps");
-        bindTexture(0, 0, LLTexUnit::TFO_TRILINEAR);
+        bindTexture_locked(0, 0, LLTexUnit::TFO_TRILINEAR);
         glGenerateMipmap(GL_TEXTURE_2D);
     }
 
@@ -540,7 +602,7 @@ void LLRenderTarget::flush()
     if (mIsSwapChainImage)
     {
         // Bottom of the stack for a render batch. Just pop the bookkeeping
-        // and leave the FBO bound — LLSwapChain::present() will rebind FBO 0
+        // and leave the FBO bound -- LLSwapChain::present() will rebind FBO 0
         // for the blit, and the next acquireNextImage() will set up the next
         // image's bind.
         sBoundTarget = nullptr;
@@ -548,7 +610,7 @@ void LLRenderTarget::flush()
     }
 
     // No parent on the stack and not a swap chain image. While the swap chain
-    // is attached (steady-state rendering) this is a missed bind site —
+    // is attached (steady-state rendering) this is a missed bind site --
     // assert so the call site can be wrapped. Before the chain attaches or
     // after release (feature-manager GPU benchmark, late shutdown cleanup)
     // fall back to the OS default framebuffer the way the old code did.
@@ -567,6 +629,7 @@ void LLRenderTarget::flush()
 
 void LLRenderTarget::bindForRead()
 {
+    LLSharedLease lease = getSharedLease();
     llassert(mFBO);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, mFBO);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
@@ -574,17 +637,20 @@ void LLRenderTarget::bindForRead()
 
 void LLRenderTarget::unbindRead()
 {
+    // Doesn't read instance state -- no lease needed.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, sCurFBO);
     glReadBuffer(sCurFBO ? GL_COLOR_ATTACHMENT0 : GL_BACK);
 }
 
 bool LLRenderTarget::isComplete() const
 {
+    LLSharedLease lease = getSharedLease();
     return !mTex.empty() || mDepth;
 }
 
 void LLRenderTarget::getViewport(S32* viewport)
 {
+    LLSharedLease lease = getSharedLease();
     viewport[0] = 0;
     viewport[1] = 0;
     viewport[2] = mResX;
@@ -593,6 +659,10 @@ void LLRenderTarget::getViewport(S32* viewport)
 
 bool LLRenderTarget::isBoundInStack() const
 {
+    // No lease: walks the static sBoundTarget chain through other RTs'
+    // mPreviousRT fields. Locking other RTs from here invites deadlock and
+    // protects nothing useful; this is a debug-style probe whose racy reads
+    // are acceptable. Same risk as before the lease refactor.
     LLRenderTarget* cur = sBoundTarget;
     while (cur && cur != this)
     {
@@ -604,18 +674,18 @@ bool LLRenderTarget::isBoundInStack() const
 
 void LLRenderTarget::swapFBORefs(LLRenderTarget& other)
 {
-    // Must be initialized
+    // Two-resource lock: this then other (consistent order).
+    LLUniqueLease lease_this = getUniqueLease();
+    LLUniqueLease lease_other = other.getUniqueLease();
+
     llassert(mFBO);
     llassert(other.mFBO);
 
-    // Must be unbound
-    // *NOTE: mPreviousRT can be non-null even if this target is unbound - presumably for debugging purposes?
     llassert(sCurFBO != mFBO);
     llassert(sCurFBO != other.mFBO);
     llassert(!isBoundInStack());
     llassert(!other.isBoundInStack());
 
-    // Must be same type
     llassert(sUseFBO == other.sUseFBO);
     llassert(mResX == other.mResX);
     llassert(mResY == other.mResY);
@@ -629,4 +699,51 @@ void LLRenderTarget::swapFBORefs(LLRenderTarget& other)
 
     std::swap(mFBO, other.mFBO);
     std::swap(mTex, other.mTex);
+}
+
+// ---------------------------------------------------------------------------
+// Self-contained scalar readers -- internal SHARED leases.
+// ---------------------------------------------------------------------------
+
+U32 LLRenderTarget::getWidth() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mResX;
+}
+
+U32 LLRenderTarget::getHeight() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mResY;
+}
+
+LLTexUnit::eTextureType LLRenderTarget::getUsage() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mUsage;
+}
+
+U32 LLRenderTarget::getDepth() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mDepth;
+}
+
+U32 LLRenderTarget::getFBO() const
+{
+    // Snapshot-return -- caller is responsible for holding a SHARED lease
+    // externally if the value's use spans potential mutations on this RT.
+    return mFBO;
+}
+
+void LLRenderTarget::markAsSwapChainImage(bool yes)
+{
+    LLUniqueLease lease = getUniqueLease();
+    mIsSwapChainImage = yes;
+}
+
+bool LLRenderTarget::isSwapChainImage() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mIsSwapChainImage;
 }

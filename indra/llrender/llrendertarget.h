@@ -31,6 +31,7 @@
 
 #include "llgl.h"
 #include "llrender.h"
+#include "llgpuresource.h"
 
 /*
  Wrapper around OpenGL framebuffer objects for use in render-to-texture
@@ -58,7 +59,10 @@
 
 */
 
-class LLRenderTarget
+// Inherits LLGPUResource: every public mutator takes an internal UNIQUE lease,
+// every self-contained reader takes an internal SHARED lease. Snapshot-return
+// accessors (getTexture, getFBO) -- see their docs.
+class LLRenderTarget : public LLGPUResource
 {
 public:
     // Whether or not to use FBO implementation
@@ -68,7 +72,7 @@ public:
     static U32 sCurResX;
     static U32 sCurResY;
 
-    // When true, flush() requires a parent on the RT stack — i.e. the viewer
+    // When true, flush() requires a parent on the RT stack -- i.e. the viewer
     // has reached steady-state rendering with the swap chain attached. When
     // false (early init before swap chain attach, or after shutdown release),
     // flush() falls back to the OS default framebuffer so pre-attach code
@@ -80,6 +84,15 @@ public:
 
     LLRenderTarget();
     ~LLRenderTarget();
+
+    // Movable so std::vector<LLRenderTarget> can reallocate. The
+    // user-declared destructor would otherwise suppress implicit move
+    // generation, falling back to copy (deleted via LLGPUResource).
+    // Only safe to move when no leases are held; see LLGPUResource doc.
+    LLRenderTarget(LLRenderTarget&&) noexcept = default;
+    LLRenderTarget(const LLRenderTarget&)            = delete;
+    LLRenderTarget& operator=(const LLRenderTarget&) = delete;
+    LLRenderTarget& operator=(LLRenderTarget&&)      = delete;
 
     //allocate resources for rendering
     //must be called before use
@@ -96,8 +109,8 @@ public:
     // swap-chain image, glViewport is restored to gGLViewport (the world
     // view rect) instead of (0,0,mResX,mResY). HUD/UI rendering and
     // renderFinalize's fullscreen triangle expect that.
-    void markAsSwapChainImage(bool yes = true) { mIsSwapChainImage = yes; }
-    bool isSwapChainImage() const { return mIsSwapChainImage; }
+    void markAsSwapChainImage(bool yes = true);
+    bool isSwapChainImage() const;
 
     // Bind this RT's FBO as GL_READ_FRAMEBUFFER (preserves the current draw
     // FBO). Pair with unbindRead() to restore the read FB to the current
@@ -165,22 +178,26 @@ public:
     void getViewport(S32* viewport);
 
     //get X resolution
-    U32 getWidth() const { return mResX; }
+    U32 getWidth() const;
 
     //get Y resolution
-    U32 getHeight() const { return mResY; }
+    U32 getHeight() const;
 
-    LLTexUnit::eTextureType getUsage(void) const { return mUsage; }
+    LLTexUnit::eTextureType getUsage() const;
 
-    U32 getTexture(U32 attachment = 0) const;
+    // Returns a guard that owns a shared lease for the caller's scope. See
+    // LLScopedTexName for the safe / unsafe usage patterns.
+    LLScopedTexName getTexture(U32 attachment = 0) const;
     U32 getNumTextures() const;
 
-    U32 getDepth(void) const { return mDepth; }
+    U32 getDepth() const;
 
     // Underlying GL framebuffer object name. Exposed for LLSwapChain's
     // present-time blit; viewer code should bind through bindTarget /
-    // bindForRead instead of touching this directly.
-    U32 getFBO() const { return mFBO; }
+    // bindForRead instead of touching this directly. Snapshot-return --
+    // caller is responsible for holding a SHARED lease on this RT for the
+    // value's use scope.
+    U32 getFBO() const;
 
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
 
@@ -230,9 +247,21 @@ protected:
     // into its images. Generalizes sub-rect viewports for any RT and maps
     // naturally to Vk/XR state. Held off today because gGLViewport changes
     // more often than window resize (per-frame setup3DViewport, UI scale,
-    // sidebar) — syncing it everywhere is intrusive. Worth taking on as
+    // sidebar) -- syncing it everywhere is intrusive. Worth taking on as
     // part of the broader render-state cleanup for Vulkan port prep.
     bool mIsSwapChainImage = false;
+
+private:
+    // Lockless helpers: do not take a lease. Public wrappers above own the
+    // lease and call these; internal callers (allocate -> release_locked,
+    // addColorAttachment debug -> bindTarget_locked / flush_locked, flush mip
+    // gen -> bindTexture_locked) use them to avoid same-thread re-entry on
+    // the shared_mutex.
+    void release_locked();
+    bool addColorAttachment_locked(U32 color_fmt);
+    void bindTarget_locked();
+    void flush_locked();
+    void bindTexture_locked(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options);
 };
 
 #endif

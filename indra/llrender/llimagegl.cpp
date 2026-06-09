@@ -189,7 +189,8 @@ void LLImageGL::checkTexSize(bool forced) const
         bool error = false;
         if (texname != mTexName)
         {
-            LL_INFOS() << "Bound: " << texname << " Should bind: " << mTexName << " Default: " << LLImageGL::sDefaultGLTexture->getTexName() << LL_ENDL;
+            auto default_guard = LLImageGL::sDefaultGLTexture->getTexName();
+            LL_INFOS() << "Bound: " << texname << " Should bind: " << mTexName << " Default: " << default_guard.get() << LL_ENDL;
 
             error = true;
             if (gDebugSession)
@@ -684,11 +685,13 @@ void LLImageGL::dump()
 //----------------------------------------------------------------------------
 void LLImageGL::forceUpdateBindStats(void) const
 {
+    LLSharedLease lease = getSharedLease();
     mLastBindTime = sLastFrameTime;
 }
 
 bool LLImageGL::updateBindStats() const
 {
+    LLSharedLease lease = getSharedLease();
     if (mTexName != 0)
     {
 #ifdef DEBUG_MISS
@@ -709,6 +712,7 @@ bool LLImageGL::updateBindStats() const
 
 F32 LLImageGL::getTimePassedSinceLastBound()
 {
+    LLSharedLease lease = getSharedLease();
     return sLastFrameTime - mLastBindTime ;
 }
 
@@ -1506,14 +1510,15 @@ bool LLImageGL::createGLTexture()
     llassert(gGLManager.mInited);
     stop_glerror();
 
-    if(mTexName)
     {
-        LLImageGL::deleteTextures(1, (reinterpret_cast<GLuint*>(&mTexName))) ;
-        mTexName = 0;
+        LLUniqueLease lease = getUniqueLease();
+        if(mTexName)
+        {
+            LLImageGL::deleteTextures(1, (reinterpret_cast<GLuint*>(&mTexName))) ;
+            mTexName = 0;
+        }
+        LLImageGL::generateTextures(1, &mTexName);
     }
-
-
-    LLImageGL::generateTextures(1, &mTexName);
     stop_glerror();
     if (!mTexName)
     {
@@ -1718,12 +1723,9 @@ bool LLImageGL::createGLTexture(S32 discard_level, const U8* data_in, bool data_
         }
         else
         {
-            //not on background thread, immediately set mTexName
-            if (old_texname != 0 && old_texname != new_texname)
-            {
-                LLImageGL::deleteTextures(1, &old_texname);
-            }
-            mTexName = new_texname;
+            // syncTexName takes the unique lease, deletes the prior name
+            // if different, and installs new_texname.
+            syncTexName(new_texname);
         }
     }
 
@@ -1742,40 +1744,12 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
     LL_PROFILE_ZONE_SCOPED;
     llassert(!on_main_thread());
 
+    // Cross-context handoff via lease: the release fires onUniqueRelease
+    // which places the fence the main-thread consumer will wait on.
     {
         LL_PROFILE_ZONE_NAMED("cglt - sync");
-        if (gGLManager.mIsNVIDIA)
-        {
-            // wait for texture upload to finish before notifying main thread
-            // upload is complete
-            auto sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-            glFlush();
-            glClientWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(sync);
-        }
-        else
-        {
-            // post a sync to the main thread (will execute before tex name swap lambda below)
-            // glFlush calls here are partly superstitious and partly backed by observation
-            // on AMD hardware
-            glFlush();
-            auto sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-            glFlush();
-            LL::WorkQueue::postMaybe(
-                mMainQueue,
-                [=]()
-                {
-                    LL_PROFILE_ZONE_NAMED("cglt - wait sync");
-                    {
-                        LL_PROFILE_ZONE_NAMED("glWaitSync");
-                        glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
-                    }
-                    {
-                        LL_PROFILE_ZONE_NAMED("glDeleteSync");
-                        glDeleteSync(sync);
-                    }
-                });
-        }
+        LLUniqueLease lease = getUniqueLease();
+        // release places fence + glFlush via the hook
     }
 
     ref();
@@ -1784,6 +1758,8 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
         [=, this]()
         {
             LL_PROFILE_ZONE_NAMED("cglt - delete callback");
+            // syncTexName takes the unique lease; its acquire-side hook
+            // server-side-waits on the fence the worker placed above.
             syncTexName(new_tex_name);
             unref();
         });
@@ -1791,9 +1767,62 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
     LL_PROFILER_GPU_COLLECT;
 }
 
+// ---- LLGPUResource hooks --------------------------------------------------
+
+void LLImageGL::onUniqueRelease()
+{
+    if (on_main_thread())
+    {
+        // No cross-context handoff on main thread.
+        return;
+    }
+
+    // Replace any prior fence. Safe to delete under unique lock -- shared
+    // and unique are mutually exclusive, so no waiter is mid-wait.
+    if (mPendingFence != nullptr)
+    {
+        glDeleteSync(mPendingFence);
+        mPendingFence = nullptr;
+    }
+
+    glFlush();
+    mPendingFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    mPendingFenceThread.store(std::this_thread::get_id(), std::memory_order_release);
+    glFlush();
+}
+
+void LLImageGL::onSharedAcquire()
+{
+    // Concurrent shared holders all wait on the same fence -- fine, glWaitSync
+    // is idempotent. The next unique holder deletes (see mPendingFence doc).
+    if (mPendingFence != nullptr &&
+        mPendingFenceThread.load(std::memory_order_acquire) != std::this_thread::get_id())
+    {
+        glWaitSync(mPendingFence, 0, GL_TIMEOUT_IGNORED);
+    }
+}
+
+void LLImageGL::onUniqueAcquire()
+{
+    if (mPendingFence != nullptr &&
+        mPendingFenceThread.load(std::memory_order_acquire) != std::this_thread::get_id())
+    {
+        glWaitSync(mPendingFence, 0, GL_TIMEOUT_IGNORED);
+    }
+    // Exclusive -- drop the fence so the next release can place a fresh one.
+    if (mPendingFence != nullptr)
+    {
+        glDeleteSync(mPendingFence);
+        mPendingFence = nullptr;
+    }
+}
+
 
 void LLImageGL::syncTexName(LLGLuint texname)
 {
+    // Mutates mTexName -- unique lease. Acquire waits on any pending
+    // cross-thread fence before we touch it.
+    LLUniqueLease lease = getUniqueLease();
     if (texname != 0)
     {
         if (mTexName != 0 && mTexName != texname)
@@ -1802,6 +1831,12 @@ void LLImageGL::syncTexName(LLGLuint texname)
         }
         mTexName = texname;
     }
+}
+
+void LLImageGL::setTexName(GLuint texName)
+{
+    LLUniqueLease lease = getUniqueLease();
+    mTexName = texName;
 }
 
 bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compressed_ok) const
@@ -1939,6 +1974,7 @@ void LLImageGL::destroyGLTexture()
 {
     checkActiveThread();
 
+    LLUniqueLease lease = getUniqueLease();
     if (mTexName != 0)
     {
         if(mTextureMemory != S64Bytes(0))
@@ -2002,6 +2038,7 @@ void LLImageGL::setFilteringOption(LLTexUnit::eTextureFilterOptions option)
 
 bool LLImageGL::getIsResident(bool test_now)
 {
+    LLSharedLease lease = getSharedLease();
     if (test_now)
     {
         if (mTexName != 0)
@@ -2019,6 +2056,7 @@ bool LLImageGL::getIsResident(bool test_now)
 
 S32 LLImageGL::getHeight(S32 discard_level) const
 {
+    LLSharedLease lease = getSharedLease();
     if (discard_level < 0)
     {
         discard_level = mCurrentDiscardLevel;
@@ -2030,6 +2068,7 @@ S32 LLImageGL::getHeight(S32 discard_level) const
 
 S32 LLImageGL::getWidth(S32 discard_level) const
 {
+    LLSharedLease lease = getSharedLease();
     if (discard_level < 0)
     {
         discard_level = mCurrentDiscardLevel;
@@ -2041,6 +2080,7 @@ S32 LLImageGL::getWidth(S32 discard_level) const
 
 S64 LLImageGL::getBytes(S32 discard_level) const
 {
+    LLSharedLease lease = getSharedLease();
     if (discard_level < 0)
     {
         discard_level = mCurrentDiscardLevel;
@@ -2054,6 +2094,7 @@ S64 LLImageGL::getBytes(S32 discard_level) const
 
 S64 LLImageGL::getMipBytes(S32 discard_level) const
 {
+    LLSharedLease lease = getSharedLease();
     if (discard_level < 0)
     {
         discard_level = mCurrentDiscardLevel;
@@ -2075,16 +2116,19 @@ S64 LLImageGL::getMipBytes(S32 discard_level) const
 
 bool LLImageGL::isJustBound() const
 {
+    LLSharedLease lease = getSharedLease();
     return sLastFrameTime - mLastBindTime < 0.5f;
 }
 
 bool LLImageGL::getBoundRecently() const
 {
+    LLSharedLease lease = getSharedLease();
     return (bool)(sLastFrameTime - mLastBindTime < MIN_TEXTURE_LIFETIME);
 }
 
 bool LLImageGL::getIsAlphaMask() const
 {
+    LLSharedLease lease = getSharedLease();
     llassert_always(!sSkipAnalyzeAlpha);
     return mIsMask;
 }
@@ -2321,6 +2365,7 @@ void LLImageGL::freePickMask()
 
 bool LLImageGL::isCompressed()
 {
+    LLSharedLease lease = getSharedLease();
     llassert(mFormatPrimary != 0);
     // *NOTE: Not all compressed formats are included here.
     bool is_compressed = false;
@@ -2386,8 +2431,20 @@ void LLImageGL::updatePickMask(S32 width, S32 height, const U8* data_in)
     }
 }
 
+bool LLImageGL::getHasGLTexture() const
+{
+    LLSharedLease lease = getSharedLease();
+    return mTexName != 0;
+}
+
+LLScopedTexName LLImageGL::getTexName() const
+{
+    return LLScopedTexName(getSharedLease(), mTexName);
+}
+
 bool LLImageGL::getMask(const LLVector2 &tc)
 {
+    LLSharedLease lease = getSharedLease();
     bool res = true;
 
     if (mPickMask)

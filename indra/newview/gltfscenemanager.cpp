@@ -781,7 +781,7 @@ void GLTFSceneManager::bindTexture(Asset& asset, TextureType texture_type, Textu
             if (tex)
             {
                 LL_PROFILE_ZONE_NAMED_CATEGORY_GLTF("gl bind texture");
-                glBindTexture(GL_TEXTURE_2D, tex->getTexName());
+                glBindTexture(GL_TEXTURE_2D, tex->getTexName().get());
 
                 if (channel != -1 && texture.mSampler != -1)
                 { // set sampler state
@@ -802,12 +802,12 @@ void GLTFSceneManager::bindTexture(Asset& asset, TextureType texture_type, Textu
             }
             else
             {
-                glBindTexture(GL_TEXTURE_2D, fallback->getTexName());
+                glBindTexture(GL_TEXTURE_2D, fallback->getTexName().get());
             }
         }
         else
         {
-            glBindTexture(GL_TEXTURE_2D, fallback->getTexName());
+            glBindTexture(GL_TEXTURE_2D, fallback->getTexName().get());
         }
     }
 }

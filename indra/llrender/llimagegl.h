@@ -37,8 +37,11 @@
 #include "llunits.h"
 #include "llthreadsafequeue.h"
 #include "llrender.h"
+#include "llgpuresource.h"
 #include "threadpool.h"
 #include "workqueue.h"
+#include <atomic>
+#include <thread>
 #include <unordered_set>
 
 #define LL_IMAGEGL_THREAD_CHECK 0 //set to 1 to enable thread debugging for ImageGL
@@ -57,7 +60,7 @@ namespace LLImageGLMemory
 }
 
 //============================================================================
-class LLImageGL : public LLRefCount
+class LLImageGL : public LLRefCount, public LLGPUResource
 {
     friend class LLTexUnit;
 public:
@@ -114,6 +117,14 @@ protected:
     void analyzeAlpha(const void* data_in, U32 w, U32 h);
     void calcAlphaChannelOffsetAndStride();
 
+    // LLGPUResource hooks: place a GL fence when an off-main thread
+    // releases a unique lease, and server-side-wait on that fence when a
+    // different thread next acquires either kind of lease. Same-thread
+    // acquires after a same-thread release pay nothing.
+    void onUniqueRelease() override;
+    void onSharedAcquire() override;
+    void onUniqueAcquire() override;
+
 public:
     virtual void dump();    // debugging info to LL_INFOS()
 
@@ -168,8 +179,10 @@ public:
     LLGLenum getPrimaryFormat() const { return mFormatPrimary; }
     LLGLenum getFormatType() const { return mFormatType; }
 
-    bool getHasGLTexture() const { return mTexName != 0; }
-    LLGLuint getTexName() const { return mTexName; }
+    bool getHasGLTexture() const;
+    // Returns a guard that owns a shared lease for the caller's scope. See
+    // LLScopedTexName doc for the safe / unsafe usage patterns.
+    LLScopedTexName getTexName() const;
 
     bool getIsAlphaMask() const;
 
@@ -251,6 +264,14 @@ private:
     U16      mHeight;
     S8       mCurrentDiscardLevel;
 
+    // Cross-context fence from the last off-thread unique release. Next
+    // cross-thread acquire glWaitSyncs on it. Only the unique lock writes
+    // or deletes the GLsync -- shared waiters just read. The mutex orders
+    // shared waiters and the unique deleter so they never overlap.
+    // - Geenz 2026-06-09
+    GLsync       mPendingFence = nullptr;
+    std::atomic<std::thread::id> mPendingFenceThread;
+
     bool mAllowCompression;
 
 protected:
@@ -321,7 +342,7 @@ public:
     void setCategory(S32 category) {mCategory = category;}
     S32  getCategory()const {return mCategory;}
 
-    void setTexName(GLuint texName) { mTexName = texName; }
+    void setTexName(GLuint texName);
 
     //similar to setTexName, but will call deleteTextures on mTexName if mTexName is not 0 or texname
     void syncTexName(LLGLuint texname);

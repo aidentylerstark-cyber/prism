@@ -313,7 +313,7 @@ void LLSceneMonitor::capture()
 
         gGL.getTexUnit(0)->bind(&cur_target);
 
-        // Read from the most recently presented swap chain image — i.e. the
+        // Read from the most recently presented swap chain image -- i.e. the
         // frame currently on screen. The current image is mid-render at this
         // point; the previous one is what the user sees.
         LLRenderTarget& src = LLAppViewer::instance()->getSwapChain().getPreviousImage();

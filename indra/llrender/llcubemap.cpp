@@ -243,9 +243,11 @@ void LLCubeMap::generateMipMaps()
     disable();
 }
 
+// Snapshot-return: caller is responsible for the texture's lifetime / lease
+// if it crosses thread boundaries.
 GLuint LLCubeMap::getGLName()
 {
-    return mImages[0]->getTexName();
+    return mImages[0]->getTexName().get();
 }
 
 void LLCubeMap::bind()

@@ -208,9 +208,10 @@ void LLCubeMapArray::unbind()
     mTextureStage = -1;
 }
 
+// Snapshot-return: caller owns lifetime / lease for cross-thread use.
 GLuint LLCubeMapArray::getGLName()
 {
-    return mImage->getTexName();
+    return mImage->getTexName().get();
 }
 
 void LLCubeMapArray::destroyGL()

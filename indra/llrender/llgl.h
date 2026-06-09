@@ -246,7 +246,9 @@ public:
     static void checkStates(GLboolean writeAlpha = GL_TRUE);
 
 protected:
-    static std::unordered_map<LLGLenum, LLGLboolean> sStateMap;
+    // CPU-side mirror of glEnable/glDisable state. GL state is per-context
+    // and each thread owns its own context, so this is thread_local.
+    static thread_local std::unordered_map<LLGLenum, LLGLboolean> sStateMap;
 
 public:
     enum { CURRENT_STATE = -2, DISABLED_STATE = 0, ENABLED_STATE = 1 };

@@ -154,17 +154,49 @@
           value="2048"/>
     </combo_box>
 
-  <check_box
-    control_name="RenderVSyncEnable"
-    height="16"
-    initial_value="true"
-    label="Enable VSync"
-    layout="topleft"
-    left="30"
-    top_delta="16"
-    name="vsync"
-    tool_tip="Synchronizes the frame rate to the refresh rate of the monitor, which results in smooth performance."
-    width="315" />
+    <text
+      type="string"
+      length="1"
+      follows="left|top"
+      height="16"
+      layout="topleft"
+      top_delta="16"
+      left="30"
+      width="160"
+      name="VSyncModeLabel"
+      text_readonly_color="LabelDisabledColor">
+        VSync:
+    </text>
+    <combo_box
+     control_name="RenderVSyncMode"
+     height="19"
+     layout="topleft"
+     left_pad="10"
+     top_delta="0"
+     name="vsync_mode"
+     tool_tip="Paces the world against the display. Off renders as fast as possible; the other modes run at the refresh rate or a fraction of it."
+     width="140">
+        <combo_box.item
+          label="Off"
+          name="VSyncOff"
+          value="0"/>
+        <combo_box.item
+          label="On"
+          name="VSyncOn"
+          value="1"/>
+        <combo_box.item
+          label="Every 2nd frame"
+          name="VSyncHalf"
+          value="2"/>
+        <combo_box.item
+          label="Every 3rd frame"
+          name="VSyncThird"
+          value="3"/>
+        <combo_box.item
+          label="Every 4th frame"
+          name="VSyncQuarter"
+          value="4"/>
+    </combo_box>
 
   <text
     type="string"

@@ -2375,12 +2375,13 @@ void clear_glerror()
 // LLGLState
 //
 
-// Static members
-std::unordered_map<LLGLenum, LLGLboolean> LLGLState::sStateMap;
+// Static members. These mirror per-context GL state, and each of our
+// rendering threads owns its own context, so they're thread_local.
+thread_local std::unordered_map<LLGLenum, LLGLboolean> LLGLState::sStateMap;
 
-GLboolean LLGLDepthTest::sDepthEnabled = GL_FALSE; // OpenGL default
-GLenum LLGLDepthTest::sDepthFunc = GL_LESS; // OpenGL default
-GLboolean LLGLDepthTest::sWriteEnabled = GL_TRUE; // OpenGL default
+thread_local GLboolean LLGLDepthTest::sDepthEnabled = GL_FALSE; // OpenGL default
+thread_local GLenum LLGLDepthTest::sDepthFunc = GL_LESS; // OpenGL default
+thread_local GLboolean LLGLDepthTest::sWriteEnabled = GL_TRUE; // OpenGL default
 
 //static
 void LLGLState::initClass()

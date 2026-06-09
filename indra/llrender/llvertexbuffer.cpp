@@ -677,9 +677,9 @@ U64 LLVertexBuffer::getBytesAllocated()
 //============================================================================
 //
 //static
-U32 LLVertexBuffer::sGLRenderBuffer = 0;
-U32 LLVertexBuffer::sGLRenderIndices = 0;
-U32 LLVertexBuffer::sLastMask = 0;
+thread_local U32 LLVertexBuffer::sGLRenderBuffer = 0;
+thread_local U32 LLVertexBuffer::sGLRenderIndices = 0;
+thread_local U32 LLVertexBuffer::sLastMask = 0;
 U32 LLVertexBuffer::sVertexCount = 0;
 
 

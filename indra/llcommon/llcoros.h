@@ -100,10 +100,10 @@ public:
     // llassert(LLCoros::on_main_coro())
     static bool on_main_coro();
 
-    // For debugging, return true if on the main thread and not in a coroutine
+    // For debugging, return true if on the viewer thread and not in a coroutine.
     // Non-thread-safe code in the main loop should be protected by
-    // llassert(LLCoros::on_main_thread_main_coro())
-    static bool on_main_thread_main_coro();
+    // llassert(LLCoros::on_viewer_thread_main_coro())
+    static bool on_viewer_thread_main_coro();
 
     /// The viewer's use of the term "coroutine" became deeply embedded before
     /// the industry term "fiber" emerged to distinguish userland threads from

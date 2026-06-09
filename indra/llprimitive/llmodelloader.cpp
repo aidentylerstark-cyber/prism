@@ -140,14 +140,14 @@ LLModelLoader::LLModelLoader(
 , mDebugMode(debugMode)
 , mJointMap(legalJointNamesMap)
 {
-    assert_main_thread();
+    assert_viewer_thread();
     sActiveLoaderList.push_back(this) ;
     mWarningsArray = LLSD::emptyArray();
 }
 
 LLModelLoader::~LLModelLoader()
 {
-    assert_main_thread();
+    assert_viewer_thread();
     sActiveLoaderList.remove(this);
 }
 

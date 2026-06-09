@@ -30,7 +30,7 @@
 #include "llrender.h"
 #include "llgl.h"
 
-LLRenderTarget* LLRenderTarget::sBoundTarget = NULL;
+thread_local LLRenderTarget* LLRenderTarget::sBoundTarget = NULL;
 U32 LLRenderTarget::sBytesAllocated = 0;
 
 void check_framebuffer_status()
@@ -51,14 +51,14 @@ void check_framebuffer_status()
 }
 
 bool LLRenderTarget::sUseFBO = false;
-U32 LLRenderTarget::sCurFBO = 0;
-bool LLRenderTarget::sFlushRequiresParent = false;
+thread_local U32 LLRenderTarget::sCurFBO = 0;
+thread_local bool LLRenderTarget::sFlushRequiresParent = false;
 
 
 extern S32 gGLViewport[4];
 
-U32 LLRenderTarget::sCurResX = 0;
-U32 LLRenderTarget::sCurResY = 0;
+thread_local U32 LLRenderTarget::sCurResX = 0;
+thread_local U32 LLRenderTarget::sCurResY = 0;
 
 LLRenderTarget::LLRenderTarget() :
     mResX(0),
@@ -76,7 +76,7 @@ LLRenderTarget::~LLRenderTarget()
 }
 
 // ---------------------------------------------------------------------------
-// Public mutators -- each takes a unique lease and delegates to a _locked
+// Public mutators - each takes a unique lease and delegates to a _locked
 // helper if it needs to call into another mutator.
 // ---------------------------------------------------------------------------
 
@@ -135,7 +135,7 @@ bool LLRenderTarget::allocate(U32 resx, U32 resy, U32 color_fmt, bool depth, LLT
 
     if (depth)
     {
-        // Inlined allocateDepth body -- still under our unique lease.
+        // Inlined allocateDepth body - still under our unique lease.
         LLImageGL::generateTextures(1, &mDepth);
         gGL.getTexUnit(0)->bindManual(mUsage, mDepth);
         U32 internal_type = LLTexUnit::getInternalType(mUsage);
@@ -185,7 +185,7 @@ void LLRenderTarget::setColorAttachment(LLImageGL* img, LLGLuint use_name)
     mResY = img->getHeight();
     mUsage = img->getTarget();
 
-    // Guarded read on img (different LLGPUResource, different mutex -- safe).
+    // Guarded read on img (different LLGPUResource, different mutex - safe).
     LLScopedTexName guard;
     if (use_name == 0)
     {
@@ -346,8 +346,8 @@ void LLRenderTarget::shareDepthBuffer(LLRenderTarget& target)
 {
     llassert(!isBoundInStack());
 
-    // Two-resource lock: acquire this then target -- consistent order across
-    // all callers prevents lock-order inversion. (Only one such method.)
+    // Lock this first, then target - keep the order consistent so we
+    // can't deadlock.
     LLUniqueLease lease_this = getUniqueLease();
     LLUniqueLease lease_other = target.getUniqueLease();
 
@@ -389,9 +389,74 @@ void LLRenderTarget::release()
     release_locked();
 }
 
+namespace
+{
+    // Wrap a fresh fence in a shared_ptr that deletes it when the last
+    // reference drops. Sync objects belong to the share group, so either
+    // context can do the delete.
+    std::shared_ptr<void> make_fence()
+    {
+        return std::shared_ptr<void>(
+            glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0),
+            [](void* sync) { if (sync) glDeleteSync((GLsync)sync); });
+    }
+}
+
+void LLRenderTarget::placeFrameCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence = make_fence();
+    std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+    mCrossSync->frameCompleteFence = std::move(fence);
+}
+
+void LLRenderTarget::waitFrameCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence;
+    {
+        std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+        fence = mCrossSync->frameCompleteFence;
+    }
+    if (fence)
+    {
+        // Server-side wait so we don't stall the CPU. Holding the
+        // shared_ptr keeps the sync alive even if the producer swaps in
+        // a new one mid-wait.
+        glWaitSync((GLsync)fence.get(), 0, GL_TIMEOUT_IGNORED);
+    }
+}
+
+void LLRenderTarget::placeReadCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence = make_fence();
+    // Flush so the other context can actually see the fence.
+    glFlush();
+    std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+    mCrossSync->readCompleteFence = std::move(fence);
+}
+
+void LLRenderTarget::waitReadCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence;
+    {
+        std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+        fence = mCrossSync->readCompleteFence;
+    }
+    if (fence)
+    {
+        glWaitSync((GLsync)fence.get(), 0, GL_TIMEOUT_IGNORED);
+    }
+}
+
 void LLRenderTarget::release_locked()
 {
     mIsSwapChainImage = false;
+
+    // Drops the fences; glDeleteSync runs when the last holder lets go.
+    mCrossSync.reset();
 
     if (mDepth)
     {
@@ -561,9 +626,8 @@ void LLRenderTarget::bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilt
 
 void LLRenderTarget::bindTexture_locked(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options)
 {
-    // Read mTex[index] directly under the caller's lease -- avoids the
-    // same-thread re-entry that calling getTexture() (also takes shared)
-    // would cause.
+    // Read mTex directly - calling getTexture() here would re-enter the
+    // lease we already hold.
     LLGLuint name = (index < mTex.size()) ? mTex[index] : 0;
     gGL.getTexUnit(channel)->bindManual(mUsage, name, filter_options == LLTexUnit::TFO_TRILINEAR || filter_options == LLTexUnit::TFO_ANISOTROPIC);
     gGL.getTexUnit(channel)->setTextureFilteringOption(filter_options);
@@ -602,7 +666,7 @@ void LLRenderTarget::flush_locked()
     if (mIsSwapChainImage)
     {
         // Bottom of the stack for a render batch. Just pop the bookkeeping
-        // and leave the FBO bound -- LLSwapChain::present() will rebind FBO 0
+        // and leave the FBO bound - LLSwapChain::present() will rebind FBO 0
         // for the blit, and the next acquireNextImage() will set up the next
         // image's bind.
         sBoundTarget = nullptr;
@@ -610,7 +674,7 @@ void LLRenderTarget::flush_locked()
     }
 
     // No parent on the stack and not a swap chain image. While the swap chain
-    // is attached (steady-state rendering) this is a missed bind site --
+    // is attached (steady-state rendering) this is a missed bind site -
     // assert so the call site can be wrapped. Before the chain attaches or
     // after release (feature-manager GPU benchmark, late shutdown cleanup)
     // fall back to the OS default framebuffer the way the old code did.
@@ -637,7 +701,7 @@ void LLRenderTarget::bindForRead()
 
 void LLRenderTarget::unbindRead()
 {
-    // Doesn't read instance state -- no lease needed.
+    // Doesn't read instance state - no lease needed.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, sCurFBO);
     glReadBuffer(sCurFBO ? GL_COLOR_ATTACHMENT0 : GL_BACK);
 }
@@ -659,10 +723,8 @@ void LLRenderTarget::getViewport(S32* viewport)
 
 bool LLRenderTarget::isBoundInStack() const
 {
-    // No lease: walks the static sBoundTarget chain through other RTs'
-    // mPreviousRT fields. Locking other RTs from here invites deadlock and
-    // protects nothing useful; this is a debug-style probe whose racy reads
-    // are acceptable. Same risk as before the lease refactor.
+    // No lease here - this walks other RTs' fields, and locking them from
+    // here just invites deadlock. It's a debug probe; racy reads are fine.
     LLRenderTarget* cur = sBoundTarget;
     while (cur && cur != this)
     {
@@ -702,7 +764,7 @@ void LLRenderTarget::swapFBORefs(LLRenderTarget& other)
 }
 
 // ---------------------------------------------------------------------------
-// Self-contained scalar readers -- internal SHARED leases.
+// Simple scalar readers - each takes its own shared lease.
 // ---------------------------------------------------------------------------
 
 U32 LLRenderTarget::getWidth() const
@@ -731,8 +793,8 @@ U32 LLRenderTarget::getDepth() const
 
 U32 LLRenderTarget::getFBO() const
 {
-    // Snapshot-return -- caller is responsible for holding a SHARED lease
-    // externally if the value's use spans potential mutations on this RT.
+    // Just a snapshot - callers that need the value to stay valid should
+    // hold a shared lease themselves.
     return mFBO;
 }
 

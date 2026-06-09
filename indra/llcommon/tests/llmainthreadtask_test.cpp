@@ -20,7 +20,7 @@
 // other Linden headers
 #include "../test/lltut.h"
 #include "../test/sync.h"
-#include "llthread.h"               // on_main_thread()
+#include "llthread.h"               // on_viewer_thread()
 #include "lleventtimer.h"
 #include "lockstatic.h"
 
@@ -38,7 +38,7 @@ namespace tut
         {
             // we're not testing the result; this is just to cache the
             // initial thread as the main thread.
-            on_main_thread();
+            on_viewer_thread();
         }
     };
     typedef test_group<llmainthreadtask_data> llmainthreadtask_group;
@@ -85,7 +85,7 @@ namespace tut
                             // have to lock static mutex to set static data
                             LockStatic()->ran = true;
                             // indicate whether task was run on the main thread
-                            return on_main_thread();
+                            return on_viewer_thread();
                         }));
                 // wait for test<2>() to unblock us again
                 mSync.yield_until(3);

@@ -300,20 +300,15 @@ static bool handleAnisotropicChanged(const LLSD& newvalue)
     return true;
 }
 
-static bool handleVSyncChanged(const LLSD& newvalue)
+static bool handleVSyncModeChanged(const LLSD& newvalue)
 {
-    LLPerfStats::tunables.vsyncEnabled = newvalue.asBoolean();
-    if (gViewerWindow && gViewerWindow->getWindow())
-    {
-        gViewerWindow->getWindow()->toggleVSync(newvalue.asBoolean());
+    LLAppViewer::instance()->setVSyncMode((U32)newvalue.asInteger());
+    return true;
+}
 
-        if (newvalue.asBoolean())
-        {
-            U32 current_target = gSavedSettings.getU32("TargetFPS");
-            gSavedSettings.setU32("TargetFPS", std::min((U32)gViewerWindow->getWindow()->getRefreshRate(), current_target));
-        }
-    }
-
+static bool handleCompositorShowRefreshChanged(const LLSD& newvalue)
+{
+    LLAppViewer::instance()->getCompositor().setShowRefreshOverlay(newvalue.asBoolean());
     return true;
 }
 
@@ -855,7 +850,8 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderFogRatio", handleFogRatioChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderMaxPartCount", handleMaxPartCountChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDynamicLOD", handleRenderDynamicLODChanged);
-    setting_setup_signal_listener(gSavedSettings, "RenderVSyncEnable", handleVSyncChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderVSyncMode", handleVSyncModeChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderCompositorShowRefresh", handleCompositorShowRefreshChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDeferredNoise", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDebugPipeline", handleRenderDebugPipelineChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderResolutionDivisor", handleRenderResolutionDivisorChanged);

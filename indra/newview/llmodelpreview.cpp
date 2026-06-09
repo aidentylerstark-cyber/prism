@@ -238,7 +238,7 @@ LLModelPreview::~LLModelPreview()
 
 void LLModelPreview::updateDimentionsAndOffsets()
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     rebuildUploadData();
 
@@ -283,7 +283,7 @@ void LLModelPreview::updateDimentionsAndOffsets()
 
 void LLModelPreview::rebuildUploadData()
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     mDefaultPhysicsShapeP = NULL;
     mUploadData.clear();
@@ -742,7 +742,7 @@ void LLModelPreview::getJointAliases(JointMap& joint_map)
 
 void LLModelPreview::loadModel(std::string filename, S32 lod, bool force_disable_slm)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     LLMutexLock lock(this);
 
@@ -878,7 +878,7 @@ void LLModelPreview::loadModel(std::string filename, S32 lod, bool force_disable
 
 void LLModelPreview::setPhysicsFromLOD(S32 lod)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     if (lod >= 0 && lod <= 3)
     {
@@ -969,7 +969,7 @@ void LLModelPreview::clearIncompatible(S32 lod)
 
 void LLModelPreview::loadModelCallback(S32 loaded_lod)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     LLMutexLock lock(this);
     if (!mModelLoader)
@@ -1294,7 +1294,7 @@ void LLModelPreview::resetPreviewTarget()
 
 void LLModelPreview::generateNormals()
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     S32 which_lod = mPreviewLOD;
 
@@ -2189,7 +2189,7 @@ void LLModelPreview::updateStatusMessages()
         TOOMANYVERTSINHULL = 8
     };
 
-    assert_main_thread();
+    assert_viewer_thread();
 
     U32 has_physics_error{ PhysicsError::NONE }; // physics error bitmap
     //triangle/vertex/submesh count for each mesh asset for each lod
@@ -3284,7 +3284,7 @@ void LLModelPreview::addEmptyFace(LLModel* pTarget)
 // Note: Render happens each frame with skinned avatars
 bool LLModelPreview::render()
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     LLMutexLock lock(this);
     mNeedsUpdate = false;

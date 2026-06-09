@@ -696,7 +696,7 @@ LLViewerFetchedTexture *LLViewerTextureList::findImage(const LLUUID &image_id, E
 void LLViewerTextureList::addImageToList(LLViewerFetchedTexture *image)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
-    assert_main_thread();
+    assert_viewer_thread();
     llassert_always(mInitialized) ;
     llassert(image);
     if (image->isInImageList())
@@ -716,7 +716,7 @@ void LLViewerTextureList::addImageToList(LLViewerFetchedTexture *image)
 void LLViewerTextureList::removeImageFromList(LLViewerFetchedTexture *image)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
-    assert_main_thread();
+    assert_viewer_thread();
     llassert_always(mInitialized) ;
     llassert(image);
 
@@ -1175,17 +1175,16 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
         LLGLDisable blend(GL_BLEND);
         gGL.setColorMask(true, true);
 
-        // Give mDownResMap a parent on the RT stack so its flush below pops
-        // back to the swap chain image instead of falling off the bottom.
-        // This pump can be called from idle() (no parent bound) or from
-        // display() (swap chain image already bound) -- only wrap when the
-        // stack is empty.
-        LLSwapChain& dr_sc = LLAppViewer::instance()->getSwapChain();
-        bool dr_sc_bound = false;
+        // Give mDownResMap a parent on the RT stack so its flush below
+        // pops back to our back buffer instead of falling off the
+        // bottom. We can get here from idle() with nothing bound, so
+        // only wrap when the stack is empty.
+        LLRenderTarget& world_rt = LLAppViewer::instance()->getBackBuffer();
+        bool world_bound = false;
         if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
         {
-            dr_sc.acquireNextImage().bindTarget();
-            dr_sc_bound = true;
+            world_rt.bindTarget();
+            world_bound = true;
         }
 
         // just in case we downres textures, bind downresmap and copy program
@@ -1225,10 +1224,10 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
         gCopyProgram.unbind();
         gPipeline.mDownResMap.flush();
 
-        if (dr_sc_bound &&
-            LLRenderTarget::getCurrentBoundTarget() == &dr_sc.getCurrentImage())
+        if (world_bound &&
+            LLRenderTarget::getCurrentBoundTarget() == &world_rt)
         {
-            dr_sc.getCurrentImage().flush();
+            world_rt.flush();
         }
     }
 

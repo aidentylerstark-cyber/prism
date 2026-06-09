@@ -117,10 +117,9 @@ protected:
     void analyzeAlpha(const void* data_in, U32 w, U32 h);
     void calcAlphaChannelOffsetAndStride();
 
-    // LLGPUResource hooks: place a GL fence when an off-main thread
-    // releases a unique lease, and server-side-wait on that fence when a
-    // different thread next acquires either kind of lease. Same-thread
-    // acquires after a same-thread release pay nothing.
+    // LLGPUResource hooks. Releasing a unique lease off-thread places a GL
+    // fence; the next acquire from a different thread waits on it.
+    // Same-thread acquires pay nothing.
     void onUniqueRelease() override;
     void onSharedAcquire() override;
     void onUniqueAcquire() override;
@@ -180,8 +179,8 @@ public:
     LLGLenum getFormatType() const { return mFormatType; }
 
     bool getHasGLTexture() const;
-    // Returns a guard that owns a shared lease for the caller's scope. See
-    // LLScopedTexName doc for the safe / unsafe usage patterns.
+    // Returns a guard that holds a shared lease for the caller's scope.
+    // See LLScopedTexName for usage.
     LLScopedTexName getTexName() const;
 
     bool getIsAlphaMask() const;
@@ -264,11 +263,9 @@ private:
     U16      mHeight;
     S8       mCurrentDiscardLevel;
 
-    // Cross-context fence from the last off-thread unique release. Next
-    // cross-thread acquire glWaitSyncs on it. Only the unique lock writes
-    // or deletes the GLsync -- shared waiters just read. The mutex orders
-    // shared waiters and the unique deleter so they never overlap.
-    // - Geenz 2026-06-09
+    // Fence from the last off-thread unique release; the next cross-thread
+    // acquire waits on it. Only the unique lock writes or deletes it -
+    // shared waiters just read.
     GLsync       mPendingFence = nullptr;
     std::atomic<std::thread::id> mPendingFenceThread;
 

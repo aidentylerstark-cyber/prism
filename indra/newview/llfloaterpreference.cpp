@@ -878,7 +878,7 @@ void LLFloaterPreference::setHardwareDefaults()
 void LLFloaterPreference::setRecommendedSettings()
 {
     resetAutotuneSettings();
-    gSavedSettings.getControl("RenderVSyncEnable")->resetToDefault(true);
+    gSavedSettings.getControl("RenderVSyncMode")->resetToDefault(true);
 
     LLFeatureManager::getInstance()->applyRecommendedSettings();
 

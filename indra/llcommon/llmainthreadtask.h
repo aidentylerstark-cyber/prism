@@ -31,7 +31,7 @@
  * exception. See std::packaged_task.)
  *
  * When you call dispatch() on the main thread (as determined by
- * on_main_thread() in llthread.h), it simply calls your task and returns the
+ * on_viewer_thread() in llthread.h), it simply calls your task and returns the
  * result.
  *
  * When you call dispatch() on a secondary thread, it instantiates an
@@ -52,7 +52,7 @@ public:
     template <typename CALLABLE>
     static auto dispatch(CALLABLE&& callable) -> decltype(callable())
     {
-        if (on_main_thread())
+        if (on_viewer_thread())
         {
             // we're already running on the main thread, perfect
             return callable();

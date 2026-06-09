@@ -67,7 +67,7 @@ namespace LLPerfStats
 
     void Tunables::applyUpdates()
     {
-        assert_main_thread();
+        assert_viewer_thread();
         // these following variables are proxies for pipeline statics we do not need a two way update (no llviewercontrol handler)
         if( tuningFlag & NonImpostors ){ gSavedSettings.setU32("RenderAvatarMaxNonImpostors", nonImpostors); };
         if( tuningFlag & ReflectionDetail ){ gSavedSettings.setS32("RenderReflectionDetail", reflectionDetail); };
@@ -87,7 +87,7 @@ namespace LLPerfStats
 
     void Tunables::updateRenderCostLimitFromSettings()
     {
-        assert_main_thread();
+        assert_viewer_thread();
         const auto newval = gSavedSettings.getF32("RenderAvatarMaxART");
         if(newval < log10(LLPerfStats::ART_UNLIMITED_NANOS/1000))
         {
@@ -117,7 +117,7 @@ namespace LLPerfStats
 
     void Tunables::initialiseFromSettings()
     {
-        assert_main_thread();
+        assert_viewer_thread();
         // the following variables are two way and have "push" in llviewercontrol
         LLPerfStats::tunables.userMinDrawDistance = gSavedSettings.getF32("AutoTuneRenderFarClipMin");
         LLPerfStats::tunables.userTargetDrawDistance = gSavedSettings.getF32("AutoTuneRenderFarClipTarget");
@@ -125,7 +125,7 @@ namespace LLPerfStats
         LLPerfStats::tunables.userImpostorDistanceTuningEnabled = gSavedSettings.getBOOL("AutoTuneImpostorByDistEnabled");
         LLPerfStats::tunables.userFPSTuningStrategy = gSavedSettings.getU32("TuningFPSStrategy");
         LLPerfStats::tunables.userTargetFPS = gSavedSettings.getU32("TargetFPS");
-        LLPerfStats::tunables.vsyncEnabled = gSavedSettings.getBOOL("RenderVSyncEnable");
+        LLPerfStats::tunables.vsyncEnabled = gSavedSettings.getU32("RenderVSyncMode") > 0;
 
         LLPerfStats::tunables.userAutoTuneLock = gSavedSettings.getBOOL("AutoTuneLock") && gSavedSettings.getU32("KeepAutoTuneLock");
 
@@ -151,7 +151,10 @@ namespace LLPerfStats
         // create a queue
         tunables.initialiseFromSettings();
         LLPerfStats::cpu_hertz = (F64)LLTrace::BlockTimer::countsPerSecond();
-        LLPerfStats::vsync_max_fps = gViewerWindow->getWindow()->getRefreshRate();
+        // Effective FPS cap = refresh / vsync mode (mode 0 = off, value
+        // unused). setVSyncMode keeps this current as the mode changes.
+        const U32 vsync_mode = llclamp(gSavedSettings.getU32("RenderVSyncMode"), 1u, 4u);
+        LLPerfStats::vsync_max_fps = gViewerWindow->getWindow()->getRefreshRate() / vsync_mode;
     }
 
     // static

@@ -326,9 +326,11 @@ public:
     static U64 getBytesAllocated();
     static const U32 sTypeSize[TYPE_MAX];
     static const U32 sGLMode[LLRender::NUM_MODES];
-    static U32 sGLRenderBuffer;
-    static U32 sGLRenderIndices;
-    static U32 sLastMask;
+    // Per-context GL state mirrors (current bindings and enabled-attribute
+    // mask), so thread_local.
+    static thread_local U32 sGLRenderBuffer;
+    static thread_local U32 sGLRenderIndices;
+    static thread_local U32 sLastMask;
     static U32 sVertexCount;
 };
 

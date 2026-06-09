@@ -81,6 +81,7 @@ LLGLSLShader    gOcclusionProgram;
 LLGLSLShader    gSkinnedOcclusionProgram;
 LLGLSLShader    gOcclusionCubeProgram;
 LLGLSLShader    gGlowCombineProgram;
+LLGLSLShader    gCompositorBlitProgram;
 LLGLSLShader    gReflectionMipProgram;
 LLGLSLShader    gGaussianProgram;
 LLGLSLShader    gRadianceGenProgram;
@@ -3226,6 +3227,16 @@ bool LLViewerShaderMgr::loadShadersInterface()
         gPathfindingNoNormalsProgram.mShaderFiles.push_back(make_pair("interface/pathfindingF.glsl", GL_FRAGMENT_SHADER));
         gPathfindingNoNormalsProgram.mShaderLevel = mShaderLevel[SHADER_INTERFACE];
         success = gPathfindingNoNormalsProgram.createShader();
+    }
+
+    if (success)
+    {
+        gCompositorBlitProgram.mName = "Compositor Blit Shader";
+        gCompositorBlitProgram.mShaderFiles.clear();
+        gCompositorBlitProgram.mShaderFiles.push_back(make_pair("interface/compositorblitV.glsl", GL_VERTEX_SHADER));
+        gCompositorBlitProgram.mShaderFiles.push_back(make_pair("interface/compositorblitF.glsl", GL_FRAGMENT_SHADER));
+        gCompositorBlitProgram.mShaderLevel = mShaderLevel[SHADER_INTERFACE];
+        success = gCompositorBlitProgram.createShader();
     }
 
     if (success)

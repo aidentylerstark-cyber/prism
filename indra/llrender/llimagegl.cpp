@@ -43,7 +43,7 @@
 #include "llframetimer.h"
 #include <unordered_set>
 
-extern LL_COMMON_API bool on_main_thread();
+extern LL_COMMON_API bool on_viewer_thread();
 
 #if !LL_IMAGEGL_THREAD_CHECK
 #define checkActiveThread()
@@ -579,6 +579,8 @@ void LLImageGL::init(bool usemipmaps, bool allow_compression)
     mCategory = -1;
 
     // Sometimes we have to post work for the main thread.
+    // The contexts share textures, so it doesn't matter for correctness
+    // which thread the work actually lands on.
     mMainQueue = LL::WorkQueue::getInstance("mainloop");
 }
 
@@ -1058,11 +1060,11 @@ U32 type_width_from_pixtype(U32 pixtype)
 bool should_stagger_image_set(bool compressed)
 {
 #if LL_DARWIN
-    return !compressed && on_main_thread() && gGLManager.mIsAMD;
+    return !compressed && on_viewer_thread() && gGLManager.mIsAMD;
 #else
     // glTexSubImage2D doesn't work with compressed textures on select tested Nvidia GPUs on Windows 10 -Cosmic,2023-03-08
     // Setting media textures off-thread seems faster when not using sub_image_lines (Nvidia/Windows 10) -Cosmic,2023-03-31
-    return !compressed && on_main_thread() && !gGLManager.mIsIntel;
+    return !compressed && on_viewer_thread() && !gGLManager.mIsIntel;
 #endif
 }
 
@@ -1635,7 +1637,7 @@ bool LLImageGL::createGLTexture(S32 discard_level, const U8* data_in, bool data_
     LL_PROFILE_GPU_ZONE("createGLTexture");
     checkActiveThread();
 
-    bool main_thread = on_main_thread();
+    bool main_thread = on_viewer_thread();
 
     if (defer_copy)
     {
@@ -1723,8 +1725,7 @@ bool LLImageGL::createGLTexture(S32 discard_level, const U8* data_in, bool data_
         }
         else
         {
-            // syncTexName takes the unique lease, deletes the prior name
-            // if different, and installs new_texname.
+            // syncTexName deletes the old name and installs the new one.
             syncTexName(new_texname);
         }
     }
@@ -1742,10 +1743,10 @@ bool LLImageGL::createGLTexture(S32 discard_level, const U8* data_in, bool data_
 void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
 {
     LL_PROFILE_ZONE_SCOPED;
-    llassert(!on_main_thread());
+    llassert(!on_viewer_thread());
 
-    // Cross-context handoff via lease: the release fires onUniqueRelease
-    // which places the fence the main-thread consumer will wait on.
+    // Take and drop a unique lease - the release hook places the fence
+    // the consumer will wait on.
     {
         LL_PROFILE_ZONE_NAMED("cglt - sync");
         LLUniqueLease lease = getUniqueLease();
@@ -1758,8 +1759,8 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
         [=, this]()
         {
             LL_PROFILE_ZONE_NAMED("cglt - delete callback");
-            // syncTexName takes the unique lease; its acquire-side hook
-            // server-side-waits on the fence the worker placed above.
+            // syncTexName takes the unique lease, which waits on the
+            // fence we placed above.
             syncTexName(new_tex_name);
             unref();
         });
@@ -1771,14 +1772,14 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
 
 void LLImageGL::onUniqueRelease()
 {
-    if (on_main_thread())
+    if (on_viewer_thread())
     {
         // No cross-context handoff on main thread.
         return;
     }
 
-    // Replace any prior fence. Safe to delete under unique lock -- shared
-    // and unique are mutually exclusive, so no waiter is mid-wait.
+    // Replace any prior fence. We hold the unique lock, so nothing can
+    // be mid-wait on the old one.
     if (mPendingFence != nullptr)
     {
         glDeleteSync(mPendingFence);
@@ -1793,8 +1794,8 @@ void LLImageGL::onUniqueRelease()
 
 void LLImageGL::onSharedAcquire()
 {
-    // Concurrent shared holders all wait on the same fence -- fine, glWaitSync
-    // is idempotent. The next unique holder deletes (see mPendingFence doc).
+    // Multiple shared holders can wait on the same fence - that's fine.
+    // The next unique holder cleans it up.
     if (mPendingFence != nullptr &&
         mPendingFenceThread.load(std::memory_order_acquire) != std::this_thread::get_id())
     {
@@ -1809,7 +1810,7 @@ void LLImageGL::onUniqueAcquire()
     {
         glWaitSync(mPendingFence, 0, GL_TIMEOUT_IGNORED);
     }
-    // Exclusive -- drop the fence so the next release can place a fresh one.
+    // Exclusive - drop the fence so the next release can place a fresh one.
     if (mPendingFence != nullptr)
     {
         glDeleteSync(mPendingFence);
@@ -1820,8 +1821,8 @@ void LLImageGL::onUniqueAcquire()
 
 void LLImageGL::syncTexName(LLGLuint texname)
 {
-    // Mutates mTexName -- unique lease. Acquire waits on any pending
-    // cross-thread fence before we touch it.
+    // We're changing mTexName, so take the unique lease. Acquiring also
+    // waits on any pending fence.
     LLUniqueLease lease = getUniqueLease();
     if (texname != 0)
     {

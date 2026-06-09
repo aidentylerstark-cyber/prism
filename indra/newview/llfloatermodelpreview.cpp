@@ -1682,7 +1682,7 @@ void LLFloaterModelPreview::addStringToLogTab(const std::string& str, bool flash
 
 void LLFloaterModelPreview::setDetails(F32 x, F32 y, F32 z)
 {
-    assert_main_thread();
+    assert_viewer_thread();
     childSetTextArg("import_dimensions", "[X]", llformat("%.3f", x));
     childSetTextArg("import_dimensions", "[Y]", llformat("%.3f", y));
     childSetTextArg("import_dimensions", "[Z]", llformat("%.3f", z));
@@ -1698,7 +1698,7 @@ void LLFloaterModelPreview::setPreviewLOD(S32 lod)
 
 void LLFloaterModelPreview::onBrowseLOD(S32 lod)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     loadModel(lod);
 }
@@ -1706,7 +1706,7 @@ void LLFloaterModelPreview::onBrowseLOD(S32 lod)
 //static
 void LLFloaterModelPreview::onReset(void* user_data)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
 
     LLFloaterModelPreview* fmp = (LLFloaterModelPreview*) user_data;
@@ -1728,7 +1728,7 @@ void LLFloaterModelPreview::onReset(void* user_data)
 //static
 void LLFloaterModelPreview::onUpload(void* user_data)
 {
-    assert_main_thread();
+    assert_viewer_thread();
 
     LLFloaterModelPreview* mp = (LLFloaterModelPreview*) user_data;
     mp->clearLogTab();
@@ -1984,14 +1984,14 @@ void LLFloaterModelPreview::setModelPhysicsFeeErrorStatus(S32 status, const std:
 /*virtual*/
 void LLFloaterModelPreview::onModelUploadSuccess()
 {
-    assert_main_thread();
+    assert_viewer_thread();
     closeFloater(false);
 }
 
 /*virtual*/
 void LLFloaterModelPreview::onModelUploadFailure()
 {
-    assert_main_thread();
+    assert_viewer_thread();
     toggleCalculateButton(true);
     mUploadBtn->setEnabled(true);
 }

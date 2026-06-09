@@ -49,8 +49,14 @@
 #include "llsys.h"          // for LLOSInfo
 #include "lltimer.h"
 #include "llappcorehttp.h"
-#include "llswapchain.h"
+#include "llcompositor.h"
+#include "llcompositable.h"
+#include "llrendertarget.h"
+#include "llthreadsafequeue.h"
 #include "threadpool_fwd.h"
+
+#include <atomic>
+#include <climits>
 
 #include <boost/signals2.hpp>
 
@@ -84,7 +90,9 @@ typedef enum
     LAST_EXEC_COUNT
 } eLastExecEvent;
 
-class LLAppViewer : public LLApp
+// LLAppViewer renders the world and UI into its own render targets, and
+// the compositor picks them up through the LLCompositable interface.
+class LLAppViewer : public LLApp, public LLCompositable
 {
 public:
     LLAppViewer();
@@ -150,11 +158,80 @@ public:
     std::string getSecondLifeTitle() const; // The Second Life title.
     std::string getWindowTitle() const; // The window display name.
 
-    // The OS window's presentation swap chain. Owns the LLRenderTarget(s) that
-    // back FBO 0 (or the equivalent on future Vk/XR backends). Viewer code
-    // acquires an image from this chain per frame instead of touching FBO 0
-    // directly.
-    LLSwapChain& getSwapChain() { return mSwapChain; }
+    // The compositor owns the swap chain and presents us each frame.
+    LLCompositor&   getCompositor()    { return mCompositor; }
+
+    // Platform-detected refresh rate of the display the window is on
+    // (LLWindow::getRefreshRate). The one number everything that shows
+    // or budgets against "the refresh rate" uses. Returns 0 if there's
+    // no window yet.
+    S32 getDisplayRefreshRate() const;
+
+    // THE gate for vsync mode changes (RenderVSyncMode). Updates the
+    // autotune state, hands the swap interval to the compositor (which
+    // applies it on its own context), and everyone else adapts to the
+    // resulting sync cadence.
+    void setVSyncMode(U32 mode);
+    LLRenderTarget& getScratchParent() { return mScratchParent; }
+
+    // Triple-buffer mailbox between the viewer thread and the compositor.
+    // Each buffer lives in exactly one slot at a time:
+    //   producer's mBackIdx | mLatestIdx slot | mFreeIdx slot |
+    //   compositor's mDisplayIdx
+    // We render into the back buffer and publish it to mLatestIdx; the
+    // compositor claims it in tryAcquireNewFront and hands its old display
+    // buffer back through mFreeIdx. Neither side waits on the other, and
+    // the latest published frame always wins.
+    LLRenderTarget& getBackBuffer() { return mRTs[mBackIdx]; }
+
+    // True when the back buffer is allocated and ready to render into.
+    bool isBackBufferReady() const { return mRTs[mBackIdx].isComplete(); }
+
+    // Sizing.
+    void allocateRenderTargets(U32 width, U32 height);
+    void resizeRenderTargets(U32 width, U32 height);
+    void releaseRenderTargets();
+
+    // Called at the end of renderViewerFrame(). Publishes the back buffer
+    // into the mailbox and picks the next one. Call this at most once per
+    // frame, otherwise we publish a buffer we never rendered into.
+    void markFrameRendered();
+
+    // Render paths call this once they've actually drawn into the back
+    // buffer; renderViewerFrame only publishes when set. The tag tells us
+    // which path drew, for diagnostics. Viewer thread only.
+    void setBackBufferRendered(const char* who)
+    {
+        mBackBufferRendered = true;
+        mBackBufferRenderedBy = who;
+    }
+
+    // Runs display() plus the post-display updaters (reflection probes,
+    // snapshot floaters), then publishes the frame for the compositor.
+    // Viewer thread only.
+    void renderViewerFrame();
+
+    // One full viewer tick: idle() followed by renderViewerFrame(). The
+    // viewer thread runs this in a loop; without a viewer thread, doFrame
+    // calls it inline.
+    void viewerThreadTick();
+
+    // The tail of the old main loop: final snapshot, voice and service
+    // pump teardown, watchdog destruction. The viewer thread runs this
+    // on its way out of run(); without a viewer thread, doFrame calls
+    // it when exiting.
+    void viewerThreadShutdown();
+
+    // - LLCompositable ---------------------------------------------------
+    // Only the compositor touches mDisplayIdx.
+    LLRenderTarget& frontBuffer() override { return mRTs[mDisplayIdx]; }
+    std::string compositableName() const override { return "World"; }
+
+    // Compositor thread: grab the latest published buffer if there is
+    // one, and hand the old display buffer back for reuse.
+    bool tryAcquireNewFront() override;
+
+public:
 
     void forceDisconnect(const std::string& msg); // Force disconnection, with a message to the user.
 
@@ -380,7 +457,30 @@ private:
     S32 mNumSessions;
 
     std::string mSerialNumber;
-    LLSwapChain mSwapChain;
+    LLCompositor          mCompositor;
+    // Triple-buffer mailbox (see getBackBuffer for how it works).
+    // Compositor-paced (when vsync is on) vs free-running (vsync off)
+    // is just whether the producer waits in markFrameRendered.
+    void resetMailbox();
+    LLRenderTarget        mRTs[3];
+    U32                   mBackIdx{0};             // producer-owned (viewer thread)
+    bool                  mBackBufferRendered{false}; // viewer-thread-only render gate
+    const char*           mBackBufferRenderedBy{"none"}; // which path set the gate
+    std::atomic<S32>      mLatestIdx{-1};          // mailbox slot; -1 = empty
+    std::atomic<S32>      mFreeIdx{1};             // recycle slot; -1 = empty
+    S32                   mDisplayIdx{2};          // compositor-owned
+    LLRenderTarget        mScratchParent;          // wrap parent for cubeSnapshot raw clear
+
+    // Compositor sync ticks for vsync pacing (RenderVSyncMode). The
+    // sync handler pushes from OS main, the viewer thread pops; tryPush
+    // drops when we're behind, so neither side ever blocks the other.
+    LLThreadSafeQueue<U64>      mSyncTicks{16};
+    boost::signals2::connection mSyncConnection;
+
+    // The viewer thread. Runs viewerThreadTick in a loop with its own
+    // shared GL context. Spawned at the end of init(), joined in cleanup()
+    // before window teardown. nullptr when we're running single threaded.
+    std::unique_ptr<class LLViewerThread> mViewerThread;
     bool mPurgeCache;
     bool mPurgeCacheOnExit;
     bool mPurgeUserDataOnExit;

@@ -29,6 +29,8 @@ set(llrender_SOURCE_FILES
     llrendersphere.cpp
     llrendertarget.cpp
     llswapchain.cpp
+    llcompositor.cpp
+    lltestsquarecompositable.cpp
     llgpuresource.cpp
     llshadermgr.cpp
     lltexture.cpp
@@ -62,6 +64,9 @@ set(llrender_HEADER_FILES
     llrendernavprim.h
     llrendersphere.h
     llswapchain.h
+    llcompositor.h
+    llcompositable.h
+    lltestsquarecompositable.h
     llgpuresource.h
     llresourcelease.h
     llshadermgr.h

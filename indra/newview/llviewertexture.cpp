@@ -1209,7 +1209,7 @@ void LLViewerFetchedTexture::init(bool firstinit)
 
 LLViewerFetchedTexture::~LLViewerFetchedTexture()
 {
-    assert_main_thread();
+    assert_viewer_thread();
     //*NOTE getTextureFetch can return NULL when Viewer is shutting down.
     // This is due to LLWearableList is singleton and is destroyed after
     // LLAppViewer::cleanup() was called. (see ticket EXT-177)
@@ -2924,8 +2924,8 @@ void LLViewerFetchedTexture::readbackRawImage()
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
 
     // readback the raw image from vram if the current raw image is null or smaller than the texture
-    // Split conditions so each lease op (getHasGLTexture, getWidth, getHeight)
-    // runs sequentially -- avoids nested shared leases on the same mutex.
+    // Each of these calls takes its own lease, so keep them sequential
+    // rather than nested.
     if (mGLTexturep.notNull() && mGLTexturep->getHasGLTexture() &&
         (mRawImage.isNull() || mRawImage->getWidth() < mGLTexturep->getWidth() || mRawImage->getHeight() < mGLTexturep->getHeight() ))
     {

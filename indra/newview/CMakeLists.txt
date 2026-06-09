@@ -709,6 +709,7 @@ set(viewer_SOURCE_FILES
     llviewertexture.cpp
     llviewertextureanim.cpp
     llviewertexturelist.cpp
+    llviewerthread.cpp
     llviewerthrottle.cpp
     llviewerwearable.cpp
     llviewerwindow.cpp
@@ -1382,6 +1383,7 @@ set(viewer_HEADER_FILES
     llviewertexture.h
     llviewertextureanim.h
     llviewertexturelist.h
+    llviewerthread.h
     llviewerthrottle.h
     llviewerwearable.h
     llviewerwindow.h

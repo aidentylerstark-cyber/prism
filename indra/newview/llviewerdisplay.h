@@ -34,6 +34,9 @@ void display_cleanup();
 
 void display(bool rebuild = true, F32 zoom_factor = 1.f, int subfield = 0, bool for_snapshot = false);
 
+// Viewer thread only. Snapshot code clears this so its readback-only
+// frames don't get published; renderViewerFrame's publish gate reads
+// and resets it.
 extern bool gDisplaySwapBuffers;
 extern bool gDepthDirty;
 extern bool gTeleportDisplay;
@@ -41,6 +44,8 @@ extern LLFrameTimer gTeleportDisplayTimer;
 extern bool         gForceRenderLandFence;
 extern bool gResizeScreenTexture;
 extern bool gResizeShadowTexture;
+// Viewer thread only - the resize callback lands here via the window
+// function queue that gatherInput drains.
 extern bool gWindowResized;
 
 #endif // LL_LLVIEWERDISPLAY_H

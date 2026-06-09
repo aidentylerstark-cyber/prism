@@ -207,6 +207,20 @@ public:
     virtual S32 getRefreshRate() { return mRefreshRate; }
 
     virtual void initWatchdog() {} // windows runs window as a thread and it needs a watchdog
+
+    // New virtuals go at the END of the class - inserting mid-class
+    // shifts every later vtable slot, and any stale or out-of-sync
+    // translation unit then dispatches into the wrong function.
+
+    // Swap every Nth vblank (1 = every vblank). The driver does the
+    // pacing; callers use this as a frame limiter. Call on the thread
+    // whose GL context should be paced.
+    virtual void setSwapInterval(S32 interval) {}
+
+    // True when the display runs a dynamic refresh rate (the OS swings
+    // it between a base and boost rate). Computed as a side effect of
+    // getRefreshRate() where supported.
+    virtual bool isDynamicRefreshRate() { return false; }
 protected:
     LLWindow(LLWindowCallbacks* callbacks, bool fullscreen, U32 flags);
     virtual ~LLWindow();

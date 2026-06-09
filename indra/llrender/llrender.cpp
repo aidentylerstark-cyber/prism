@@ -221,9 +221,7 @@ void LLTexUnit::bindFast(LLTexture* texture)
     {
         LL_PROFILE_ZONE_NAMED("MISSING TEXTURE");
         //if deleted, will re-generate it immediately
-        // No lease here -- re-entrant calls take their own unique. Trailing
-        // glBindTexture uses whatever mCurrTexture bindDefaultImage left,
-        // same as pre-lease.
+        // No lease here - the calls below take their own.
         texture->forceImmediateUpdate();
         gl_tex->forceUpdateBindStats();
         texture->bindDefaultImage(mIndex);
@@ -253,8 +251,8 @@ bool LLTexUnit::bind(LLTexture* texture, bool for_rendering, bool forceBind)
             bool needs_default = false;
             bool did_bind = false;
             {
-                // Guard scoped to texname read + glBindTexture only.
-                // Drop before updateBindStats (it takes its own shared lease).
+                // Scope the guard to the bind only - updateBindStats takes
+                // its own lease, and leases don't nest.
                 auto guard = gl_tex->getTexName();
                 U32 texname = guard.get();
                 if (texname)
@@ -326,8 +324,8 @@ bool LLTexUnit::bind(LLImageGL* texture, bool for_rendering, bool forceBind, S32
     U32 texname = 0;
     bool did_bind = false;
     {
-        // Guard scoped to texname read + glBindTexture only. Internal
-        // updateBindStats below takes its own shared lease -- can't nest.
+        // Scope the guard to the bind only - updateBindStats below takes
+        // its own lease, and leases don't nest.
         auto guard = texture->getTexName();
         texname = usename ? usename : guard.get();
 

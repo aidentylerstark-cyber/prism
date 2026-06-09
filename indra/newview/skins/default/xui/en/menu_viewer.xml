@@ -2743,6 +2743,16 @@ function="World.EnvPreset"
                  parameter="DebugShowRenderInfo" />
             </menu_item_check>
             <menu_item_check
+             label="Show Compositor Refresh"
+             name="Show Compositor Refresh">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="RenderCompositorShowRefresh" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="RenderCompositorShowRefresh" />
+            </menu_item_check>
+            <menu_item_check
              label="Show Avatar Render Info"
              name="Show Avatar Render Info">
                 <menu_item_check.on_check

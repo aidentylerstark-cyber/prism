@@ -37,7 +37,7 @@ LLPBRTerrainFeatures gPBRTerrainFeatures;
 // static
 void LLPBRTerrainFeatures::queueQuery(LLViewerRegion& region, void(*done_callback)(LLUUID, bool, const LLModifyRegion&))
 {
-    llassert(on_main_thread());
+    llassert(on_viewer_thread());
     llassert(LLCoros::on_main_coro());
 
     LLUUID region_id = region.getRegionID();
@@ -52,7 +52,7 @@ void LLPBRTerrainFeatures::queueQuery(LLViewerRegion& region, void(*done_callbac
 // static
 void LLPBRTerrainFeatures::queueModify(LLViewerRegion& region, const LLModifyRegion& composition)
 {
-    llassert(on_main_thread());
+    llassert(on_viewer_thread());
     llassert(LLCoros::on_main_coro());
 
     LLSD updates = LLSD::emptyMap();

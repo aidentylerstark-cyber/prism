@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater
- height="642"
+ height="662"
  layout="topleft"
  name="performance"
  save_rect="true"

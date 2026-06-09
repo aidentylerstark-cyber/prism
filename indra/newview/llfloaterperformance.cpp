@@ -29,12 +29,14 @@
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "llappearancemgr.h"
+#include "llappviewer.h"
 #include "llavataractions.h"
 #include "llavatarrendernotifier.h"
 #include "llcheckboxctrl.h"
 #include "llcombobox.h"
 #include "llfeaturemanager.h"
 #include "llfloaterpreference.h" // LLAvatarComplexityControls
+#include "llfloaterpreferencesgraphicsadvanced.h" // populateVSyncCombo
 #include "llfloaterreg.h"
 #include "llnamelistctrl.h"
 #include "llnotificationsutil.h"
@@ -187,6 +189,15 @@ void LLFloaterPerformance::showSelectedPanel(LLPanel* selected_panel)
 void LLFloaterPerformance::showAutoadjustmentsPanel()
 {
     showSelectedPanel(mAutoadjustmentsPanel);
+}
+
+void LLFloaterPerformance::onOpen(const LLSD& key)
+{
+    LLFloater::onOpen(key);
+    // Mirror the advanced-graphics vsync dropdown: refresh-rate-aware
+    // labels, re-detected each open.
+    LLFloaterPreferenceGraphicsAdvanced::populateVSyncCombo(
+        mAutoadjustmentsPanel->getChild<LLComboBox>("vsync_mode"));
 }
 
 void LLFloaterPerformance::draw()
@@ -518,9 +529,10 @@ void LLFloaterPerformance::setFPSText()
     mTextFPSValue->setValue(current_fps);
 
     std::string fps_text = getString("fps_text");
-    static LLCachedControl<bool> vsync_enabled(gSavedSettings, "RenderVSyncEnable", true);
-    S32 refresh_rate = gViewerWindow->getWindow()->getRefreshRate();
-    if (vsync_enabled && (refresh_rate > 0) && (current_fps >= refresh_rate))
+    static LLCachedControl<U32> vsync_mode(gSavedSettings, "RenderVSyncMode", 1);
+    const U32 mode = llclamp((U32)vsync_mode, 0u, 4u);
+    S32 refresh_rate = LLAppViewer::instance()->getDisplayRefreshRate();
+    if (mode > 0 && (refresh_rate > 0) && (current_fps >= refresh_rate / (S32)mode))
     {
         fps_text += getString("max_text");
     }

@@ -61,6 +61,7 @@ namespace LLPerfStats
     static constexpr U32 TUNE_SCENE_ONLY{2};
 
     extern F64 cpu_hertz;
+    extern U32 vsync_max_fps; // effective FPS cap when vsync is on (refresh / mode)
 
     extern std::atomic<int64_t> tunedAvatars;
     extern std::atomic<U64> renderAvatarMaxART_ns;

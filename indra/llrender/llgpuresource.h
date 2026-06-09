@@ -35,19 +35,13 @@
 
 // Base class for GPU resources that need cross-thread synchronization.
 //
-// Provides two kinds of RAII lease:
-//   - shared (many concurrent holders, read-only access)
-//   - unique (exclusive, for mutation)
+// Provides two kinds of RAII lease: shared (many readers) and unique (one
+// writer). Subclasses can override the acquire/release hooks to place GL
+// fences at the lease boundary; the defaults do nothing, so resources that
+// don't need cross-context fences pay nothing.
 //
-// Backed by std::shared_mutex. Subclasses override the on*Acquire/Release
-// hooks to inject GL fences at the lease boundary when GPU-side ordering
-// needs to follow CPU-side serialization -- e.g. a worker context's writes
-// must be GPU-visible before a different context reads. Defaults are no-op,
-// so resources that don't need cross-context fences pay nothing.
-//
-// Leases follow std::shared_mutex semantics: non-recursive, same-thread
-// release. A thread that holds a lease must not acquire another lease on
-// the same resource (deadlock).
+// Leases follow std::shared_mutex rules: non-recursive, so don't take a
+// second lease on the same resource while you already hold one.
 class LLGPUResource
 {
 public:
@@ -57,11 +51,9 @@ public:
     LLGPUResource(const LLGPUResource&)            = delete;
     LLGPUResource& operator=(const LLGPUResource&) = delete;
 
-    // Movable: the mutex hides behind a unique_ptr so the default move
-    // ctor works. After a move the source's mLeaseMutex is null -- further
-    // lease ops on it are UB. Only safe to move when no leases are live;
-    // in practice that's container setup time, never mid-render. Needed so
-    // vector<LLRenderTarget> et al. can reallocate.
+    // Movable so containers of these can reallocate. Only move when no
+    // leases are live; a moved-from resource has a null mutex and can't
+    // be leased again.
     LLGPUResource(LLGPUResource&& other) noexcept = default;
     LLGPUResource& operator=(LLGPUResource&&)     = delete;
 
@@ -69,9 +61,8 @@ public:
     LLUniqueLease getUniqueLease()       { return LLUniqueLease(this); }
 
 protected:
-    // Hooks called by the lease lifecycle. Defaults are no-op. Subclasses
-    // override the ones they care about. Called with the appropriate lock
-    // held (shared lock for shared hooks, exclusive lock for unique hooks).
+    // Lease lifecycle hooks, called with the lock held. Override the ones
+    // you care about; the defaults do nothing.
     virtual void onSharedAcquire() {}
     virtual void onSharedRelease() {}
     virtual void onUniqueAcquire() {}
@@ -83,18 +74,15 @@ private:
     mutable std::unique_ptr<std::shared_mutex> mLeaseMutex;
 };
 
-// Guarded GL texture name. Returned by accessors that would otherwise be
-// snapshot-return -- the lease lives in this guard, keyed to the caller's
-// scope. Use .get() to read the value; the guard's lifetime is what holds
-// the lock.
+// Guarded GL texture name - the guard holds a shared lease for as long as
+// it lives. Use .get() to read the value.
 //
-// Common safe patterns:
-//   glBindTexture(target, img->getTexName().get());     // expression scope
-//   auto name = img->getTexName();                       // statement scope
-//   ... use name.get() ...
+// Safe:
+//   glBindTexture(target, img->getTexName().get());
+//   auto name = img->getTexName(); ... name.get() ...
 //
-// Unsafe (don't): assigning .get() into an LLGLuint local -- the guard temp
-// destructs at the ;, leaving you using the value without the lock.
+// Unsafe: stashing .get() into a plain LLGLuint - the guard temp dies at
+// the semicolon and you're using the value without the lock.
 class LLScopedTexName
 {
 public:

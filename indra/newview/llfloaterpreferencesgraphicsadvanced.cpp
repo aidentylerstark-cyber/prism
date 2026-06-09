@@ -36,9 +36,12 @@
 #include "llsliderctrl.h"
 #include "lltextbox.h"
 #include "lltrans.h"
+#include "llappviewer.h"
 #include "llviewershadermgr.h"
 #include "llviewertexturelist.h"
+#include "llviewerwindow.h"
 #include "llvoavatar.h"
+#include "llwindow.h"
 #include "pipeline.h"
 
 
@@ -111,7 +114,35 @@ bool LLFloaterPreferenceGraphicsAdvanced::postBuild()
 
 void LLFloaterPreferenceGraphicsAdvanced::onOpen(const LLSD& key)
 {
+    refreshVSyncLabels();
     refresh();
+}
+
+void LLFloaterPreferenceGraphicsAdvanced::refreshVSyncLabels()
+{
+    populateVSyncCombo(getChild<LLComboBox>("vsync_mode"));
+}
+
+// static
+void LLFloaterPreferenceGraphicsAdvanced::populateVSyncCombo(LLComboBox* combo)
+{
+    // Label each mode with the refresh rate it targets - the display's
+    // rate divided by the mode (swap interval). Refreshed on every open
+    // since the rate can change (different monitor, display settings).
+    // On a dynamic-refresh display these are the upper bound per mode,
+    // since the OS varies the real rate. If we can't detect a rate
+    // (non-Windows, pre-detection) the static XML labels stand.
+    S32 refresh = LLAppViewer::instance()->getDisplayRefreshRate();
+    if (refresh > 0)
+    {
+        combo->clearRows();
+        combo->add("Off", LLSD(0));
+        combo->add(llformat("%dHz", refresh), LLSD(1));
+        combo->add(llformat("%dHz", refresh / 2), LLSD(2));
+        combo->add(llformat("%dHz", refresh / 3), LLSD(3));
+        combo->add(llformat("%dHz", refresh / 4), LLSD(4));
+        combo->setValue(LLSD((S32)gSavedSettings.getU32("RenderVSyncMode")));
+    }
 }
 
 void LLFloaterPreferenceGraphicsAdvanced::onClickCloseBtn(bool app_quitting)

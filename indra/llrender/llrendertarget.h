@@ -33,6 +33,9 @@
 #include "llrender.h"
 #include "llgpuresource.h"
 
+#include <memory>
+#include <mutex>
+
 /*
  Wrapper around OpenGL framebuffer objects for use in render-to-texture
 
@@ -59,36 +62,38 @@
 
 */
 
-// Inherits LLGPUResource: every public mutator takes an internal UNIQUE lease,
-// every self-contained reader takes an internal SHARED lease. Snapshot-return
-// accessors (getTexture, getFBO) -- see their docs.
+// Inherits LLGPUResource: mutators take a unique lease internally, readers
+// a shared one. getTexture and getFBO are a bit different - see their docs.
 class LLRenderTarget : public LLGPUResource
 {
 public:
     // Whether or not to use FBO implementation
     static bool sUseFBO;
     static U32 sBytesAllocated;
-    static U32 sCurFBO;
-    static U32 sCurResX;
-    static U32 sCurResY;
+    // Per-context GL state - each thread owns its own context, so the
+    // FBO binding stack can't be shared across threads.
+    static thread_local U32 sCurFBO;
+    static thread_local U32 sCurResX;
+    static thread_local U32 sCurResY;
 
-    // When true, flush() requires a parent on the RT stack -- i.e. the viewer
-    // has reached steady-state rendering with the swap chain attached. When
-    // false (early init before swap chain attach, or after shutdown release),
-    // flush() falls back to the OS default framebuffer so pre-attach code
-    // paths (feature-manager GPU benchmark, etc.) keep working. Toggled by
-    // LLSwapChain attach/release.
+    // When true, flush() requires a parent on the RT stack - i.e. this
+    // context is mid-world-render and a top-level parentless flush is a
+    // missed bind site. When false (early init, standalone GPU passes
+    // like avatar profiling that run outside the world render, or after
+    // shutdown release), flush() falls back to the OS default
+    // framebuffer. Per-context (thread_local): the viewer thread scopes
+    // it to renderViewerFrame, the compositor's swap chain latches it on
+    // its own context. A plain global would let one context's render
+    // scope wrongly gate the other's flushes.
     // - Geenz 2026-06-08
-    static bool sFlushRequiresParent;
+    static thread_local bool sFlushRequiresParent;
 
 
     LLRenderTarget();
     ~LLRenderTarget();
 
-    // Movable so std::vector<LLRenderTarget> can reallocate. The
-    // user-declared destructor would otherwise suppress implicit move
-    // generation, falling back to copy (deleted via LLGPUResource).
-    // Only safe to move when no leases are held; see LLGPUResource doc.
+    // Movable so std::vector<LLRenderTarget> can reallocate. Only safe to
+    // move when no leases are held - see LLGPUResource.
     LLRenderTarget(LLRenderTarget&&) noexcept = default;
     LLRenderTarget(const LLRenderTarget&)            = delete;
     LLRenderTarget& operator=(const LLRenderTarget&) = delete;
@@ -192,14 +197,42 @@ public:
 
     U32 getDepth() const;
 
-    // Underlying GL framebuffer object name. Exposed for LLSwapChain's
-    // present-time blit; viewer code should bind through bindTarget /
-    // bindForRead instead of touching this directly. Snapshot-return --
-    // caller is responsible for holding a SHARED lease on this RT for the
-    // value's use scope.
+    // Underlying GL framebuffer object name. FBOs aren't shared between
+    // contexts (the attached textures are), so this is only meaningful on
+    // the thread that allocated it. Just a snapshot - hold a shared lease
+    // yourself while you use the value.
     U32 getFBO() const;
 
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
+
+    // Cross-context GPU sync. Opt in for RTs that another GL context reads
+    // from; everything else carries no sync state at all.
+    void setNeedsCrossContextSync(bool b)
+    {
+        if (b && !mCrossSync)
+        {
+            mCrossSync = std::make_shared<CrossContextSync>();
+        }
+        else if (!b)
+        {
+            mCrossSync.reset();
+        }
+    }
+    bool needsCrossContextSync() const { return (bool)mCrossSync; }
+
+    // The writer places this fence when it finishes a frame; the reader
+    // waits on it before sampling so it only sees complete pixels.
+    void placeFrameCompleteFence();
+
+    // Server-side wait on the writer's fence. No-op if there's no fence
+    // or sync is disabled.
+    void waitFrameCompleteFence();
+
+    // Reverse direction: the reader places this after sampling, and the
+    // writer waits on it before rendering into the RT again so the two
+    // don't race on the GPU.
+    void placeReadCompleteFence();
+    void waitReadCompleteFence();
 
     //flush rendering operations
     //must be called when rendering is complete
@@ -222,7 +255,9 @@ public:
     // *HACK
     void swapFBORefs(LLRenderTarget& other);
 
-    static LLRenderTarget* sBoundTarget;
+    // Per-GL-context state - thread_local for the same reasons as
+    // sCurFBO above.
+    static thread_local LLRenderTarget* sBoundTarget;
 
 protected:
     U32 mResX;
@@ -247,16 +282,30 @@ protected:
     // into its images. Generalizes sub-rect viewports for any RT and maps
     // naturally to Vk/XR state. Held off today because gGLViewport changes
     // more often than window resize (per-frame setup3DViewport, UI scale,
-    // sidebar) -- syncing it everywhere is intrusive. Worth taking on as
+    // sidebar) - syncing it everywhere is intrusive. Worth taking on as
     // part of the broader render-state cleanup for Vulkan port prep.
     bool mIsSwapChainImage = false;
 
+    // Cross-context GPU sync state. Only allocated for RTs that opt in -
+    // a null mCrossSync means no sync. frameComplete is placed by the
+    // producer and waited on by the compositor; readComplete goes the
+    // other way.
+    //
+    // Fences are shared_ptr<void> with glDeleteSync as the deleter, so a
+    // fence can't be deleted out from under a waiter that still holds a
+    // reference. The mutex only guards the pointer swap, never a GL call.
+    struct CrossContextSync
+    {
+        std::mutex            fenceMutex;
+        std::shared_ptr<void> frameCompleteFence;
+        std::shared_ptr<void> readCompleteFence;
+    };
+    std::shared_ptr<CrossContextSync> mCrossSync;
+
 private:
-    // Lockless helpers: do not take a lease. Public wrappers above own the
-    // lease and call these; internal callers (allocate -> release_locked,
-    // addColorAttachment debug -> bindTarget_locked / flush_locked, flush mip
-    // gen -> bindTexture_locked) use them to avoid same-thread re-entry on
-    // the shared_mutex.
+    // The _locked helpers don't take a lease - the public wrappers own it.
+    // Internal callers use these to avoid re-entering the shared_mutex on
+    // the same thread.
     void release_locked();
     bool addColorAttachment_locked(U32 color_fmt);
     void bindTarget_locked();

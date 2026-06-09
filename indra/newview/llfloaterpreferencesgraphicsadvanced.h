@@ -29,6 +29,7 @@
 #include "llcontrol.h"
 #include "llfloater.h"
 
+class LLComboBox;
 class LLSliderCtrl;
 class LLTextBox;
 
@@ -43,6 +44,10 @@ public:
     void disableUnavailableSettings();
     void refreshEnabledGraphics();
     void refreshEnabledState();
+    void refreshVSyncLabels();
+    // Fill a "vsync_mode" combo with refresh-rate-aware labels. Shared
+    // with the performance floater so both surfaces read identically.
+    static void populateVSyncCombo(LLComboBox* combo);
     void updateSliderText(LLSliderCtrl* ctrl, LLTextBox* text_box);
     void updateMaxNonImpostors();
     void updateIndirectMaxNonImpostors(const LLSD& newvalue);

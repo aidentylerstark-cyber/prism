@@ -157,7 +157,24 @@ public:
 
 //============================================================================
 
-extern LL_COMMON_API bool assert_main_thread();
-extern LL_COMMON_API bool on_main_thread();
+// The viewer thread is where we render frames and run most of what
+// used to be the main loop. It used to be the OS main thread; now it
+// runs on its own while the OS main thread handles the compositor.
+// set_viewer_thread() anchors it when the thread starts;
+// clear_viewer_thread() un-anchors it after the thread is joined at
+// shutdown. While unset, on_viewer_thread() falls back to the OS main
+// thread check, so early init and post-join cleanup both run as the
+// acting viewer thread without tripping asserts.
+extern LL_COMMON_API void set_viewer_thread();
+extern LL_COMMON_API void clear_viewer_thread();
+extern LL_COMMON_API bool assert_viewer_thread();
+extern LL_COMMON_API bool on_viewer_thread();
+
+// The OS main thread owns the window message pump and the compositor.
+// We record it explicitly at window init so it sticks to the real OS
+// main thread rather than whoever happens to ask first.
+extern LL_COMMON_API void set_os_main_thread();
+extern LL_COMMON_API bool assert_os_main_thread();
+extern LL_COMMON_API bool on_os_main_thread();
 
 #endif // LL_LLTHREAD_H

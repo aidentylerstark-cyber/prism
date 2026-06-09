@@ -73,6 +73,7 @@
 #include "lltracethreadrecorder.h"
 #include "llviewerwindow.h"
 #include "llviewerdisplay.h"
+#include "llviewerthread.h"
 #include "llviewermedia.h"
 #include "llviewerparcelaskplay.h"
 #include "llviewerparcelmedia.h"
@@ -245,6 +246,8 @@
 #include "gltfscenemanager.h"
 
 #include "workqueue.h"
+
+#include <thread>
 using namespace LL;
 
 // Include for security api initialization
@@ -374,6 +377,15 @@ bool gDoDisconnect = false;
 // We don't want anyone, especially threads working on the graphics pipeline,
 // to have to block due to this WorkQueue being full.
 WorkQueue gMainloopWork("mainloop", 1024*1024);
+
+// Work queue for things that need to run on the viewer thread, like
+// texture-sync callbacks that have to land on the thread that owns the
+// viewer's GL context.
+WorkQueue gViewerWork("viewer", 1024*1024);
+
+// Work queue for things that need to run on the OS main thread, like
+// DestroyWindow calls on windows that thread owns.
+WorkQueue gOSMainWork("osmain", 1024*1024);
 
 ////////////////////////////////////////////////////////////
 // Internal globals... that should be removed.
@@ -737,6 +749,524 @@ LLAppViewer::~LLAppViewer()
     removeMarkerFiles();
 }
 
+// - LLCompositable plumbing -------------------------------------------------
+
+void LLAppViewer::resetMailbox()
+{
+    // Starting layout: we hold 0, the free slot holds 1, and the
+    // compositor displays 2 (black until the first publish). Both
+    // pacing modes use the same layout.
+    mBackIdx = 0;
+    mLatestIdx.store(-1, std::memory_order_release);
+    mFreeIdx.store(1, std::memory_order_release);
+    mDisplayIdx = 2;
+}
+
+void LLAppViewer::allocateRenderTargets(U32 width, U32 height)
+{
+    llassert(width > 0 && height > 0);
+
+    // All three buffers are marked as swap chain images so the viewport
+    // restores correctly on pop-back, and flagged for cross-context
+    // sync since the viewer thread writes them while the compositor's
+    // context reads them.
+    for (auto& rt : mRTs)
+    {
+        rt.allocate(width, height, GL_RGBA, /*depth=*/true);
+        rt.markAsSwapChainImage(true);
+        rt.setNeedsCrossContextSync(true);
+    }
+    resetMailbox();
+
+    // Scratch parent for the post-display updaters - somewhere safe for
+    // cubeSnapshot's raw glClear to land each frame.
+    mScratchParent.allocate(width, height, GL_RGBA, /*depth=*/true);
+    mScratchParent.markAsSwapChainImage(true);
+}
+
+void LLAppViewer::resizeRenderTargets(U32 width, U32 height)
+{
+    if (!mRTs[0].isComplete())
+    {
+        allocateRenderTargets(width, height);
+        return;
+    }
+    for (auto& rt : mRTs)
+    {
+        rt.resize(width, height);
+    }
+    mScratchParent.resize(width, height);
+}
+
+void LLAppViewer::releaseRenderTargets()
+{
+    for (auto& rt : mRTs)
+    {
+        rt.release();
+    }
+    mScratchParent.release();
+    resetMailbox();
+}
+
+void LLAppViewer::markFrameRendered()
+{
+    // When vsync is on the world is compositor-paced: wait for the
+    // compositor to claim our last publish before sending another, so
+    // we don't run ahead of it. With vsync off the world runs free and
+    // the latest frame wins.
+    static LLCachedControl<U32> vsync_mode(gSavedSettings, "RenderVSyncMode", 1);
+    if ((U32)vsync_mode > 0)
+    {
+        U32 spins = 0;
+        while (mLatestIdx.load(std::memory_order_acquire) != -1)
+        {
+            if (++spins < 64)
+            {
+                std::this_thread::yield();
+            }
+            else
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+        }
+    }
+
+    // Publish into the mailbox. Fence and flush first so the compositor
+    // can wait on the completed frame GPU-side.
+    mRTs[mBackIdx].placeFrameCompleteFence();
+    glFlush();
+
+    S32 old_latest = mLatestIdx.exchange((S32)mBackIdx, std::memory_order_acq_rel);
+    if (old_latest != -1)
+    {
+        // The compositor never picked up our last publish - take it back
+        // and reuse it as our next back buffer.
+        mBackIdx = (U32)old_latest;
+    }
+    else
+    {
+        // The compositor took our last publish; grab the buffer it
+        // released from the free slot. There's a tiny window in
+        // tryAcquireNewFront where both slots are briefly empty, so
+        // spin until the free slot fills in.
+        S32 free_idx = mFreeIdx.exchange(-1, std::memory_order_acq_rel);
+        U32 spins = 0;
+        while (free_idx == -1)
+        {
+            if (++spins < 64)
+            {
+                std::this_thread::yield();
+            }
+            else
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+            free_idx = mFreeIdx.exchange(-1, std::memory_order_acq_rel);
+        }
+        mBackIdx = (U32)free_idx;
+    }
+    produceFrame();  // frame metrics
+}
+
+bool LLAppViewer::tryAcquireNewFront()
+{
+    // Compositor thread: claim the latest published buffer, if any.
+    S32 latest = mLatestIdx.exchange(-1, std::memory_order_acq_rel);
+    if (latest == -1)
+    {
+        return false; // nothing new; keep re-presenting mDisplayIdx
+    }
+    // Release the previously displayed buffer to the producer's free
+    // slot and adopt the fresh one.
+    mFreeIdx.store(mDisplayIdx, std::memory_order_release);
+    mDisplayIdx = latest;
+    return true;
+}
+
+void LLAppViewer::viewerThreadTick()
+{
+    // Vsync pacing (RenderVSyncMode): 0 = off, the world renders as
+    // fast as it can. Otherwise run one tick per compositor sync - the
+    // driver already divides the present cadence via the swap interval,
+    // so waiting for the next sync IS refresh/N pacing. Stale ticks get
+    // drained first so a slow frame doesn't burst afterward. The pop
+    // times out so a stalled compositor can't wedge us, and the
+    // single-thread fallback skips the gate - the sync fires after our
+    // inline tick, so waiting on it would deadlock.
+    static LLCachedControl<U32> vsync_mode(gSavedSettings, "RenderVSyncMode", 1);
+    if ((U32)vsync_mode > 0 && mViewerThread)
+    {
+        U64 tick = 0;
+        while (mSyncTicks.tryPop(tick)) {}
+        mSyncTicks.tryPopFor(std::chrono::milliseconds(100), tick);
+    }
+
+    // Everything the old main loop did runs here, minus the compositor
+    // present and the OS-affine work queue, which stay on OS main.
+    LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_FRAME);
+
+#ifdef LL_DISCORD
+    {
+        LL_PROFILE_ZONE_NAMED("discord_callbacks");
+        discordpp::RunCallbacks();
+    }
+#endif
+
+    if (!LLWorld::instanceExists())
+    {
+        LLWorld::createInstance();
+    }
+
+    //memory leaking simulation
+    if (gSimulateMemLeak)
+    {
+        LLFloaterMemLeak* mem_leak_instance =
+            LLFloaterReg::findTypedInstance<LLFloaterMemLeak>("mem_leaking");
+        if (mem_leak_instance)
+        {
+            mem_leak_instance->idle();
+        }
+    }
+
+    // Apply auto-tune updates decided last frame.
+    if (LLPerfStats::tunables.userAutoTuneEnabled
+        && LLPerfStats::tunables.tuningFlag != LLPerfStats::Tunables::Nothing)
+    {
+        LLPerfStats::tunables.applyUpdates();
+    }
+
+    // LLTrace frame rotation. The recorders are thread_local, so this
+    // has to happen on the thread that records and reads them - us.
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt LLTrace");
+        if (LLFloaterReg::instanceVisible("block_timers"))
+        {
+            LLTrace::BlockTimer::processTimes();
+        }
+        LLTrace::get_frame_recording().nextPeriod();
+        LLTrace::BlockTimer::logStats();
+        LLTrace::get_thread_recorder()->pullFromChildren();
+        LL_CLEAR_CALLSTACKS();
+    }
+
+    // Drain native events. The OS window thread queues them; we drain
+    // them here. The queues are thread safe.
+    if (gViewerWindow)
+    {
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt processMiscNativeEvents");
+            gViewerWindow->getWindow()->processMiscNativeEvents();
+        }
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt gatherInput");
+            // Re-arm the crash/signal handlers - drivers and injected
+            // DLLs can overwrite them during message handling.
+            if (!restoreErrorTrap())
+            {
+                LL_WARNS() << " Someone took over my signal/exception handler (post messagehandling)!" << LL_ENDL;
+            }
+            gViewerWindow->getWindow()->gatherInput();
+        }
+    }
+
+    // Joystick / keyboard / mouse polls. Same gating as the old
+    // single-threaded doFrame.
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt JoystickKeyboard");
+        pingMainloopTimeout("Vt:JoystickKeyboard");
+
+        if (gViewerWindow
+            && (gHeadlessClient || gViewerWindow->getWindow()->getVisible())
+            && gViewerWindow->getActive()
+            && !gViewerWindow->getWindow()->getMinimized()
+            && LLStartUp::getStartupState() == STATE_STARTED
+            && (gHeadlessClient || !gViewerWindow->getShowProgress())
+            && !gFocusMgr.focusLocked())
+        {
+            LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
+            joystick->scanJoystick();
+            gKeyboard->scanKeyboard();
+            gViewerInput.scanMouse();
+        }
+    }
+
+    // Drain the viewer-thread async work queue.
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt work");
+        static std::chrono::nanoseconds kViewerWorkTime{1'000'000}; // 1ms slice
+        gViewerWork.runFor(kViewerWorkTime);
+    }
+
+    // Post the per-frame "mainloop" event and give coroutines a chance
+    // to run.
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt mainloop");
+        pingMainloopTimeout("vt mainloop");
+        static LLEventPump& mainloop(LLEventPumps::instance().obtain("mainloop"));
+        mainloop.post(LLSD());
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt suspend");
+        pingMainloopTimeout("vt suspend");
+        llcoro::suspend();
+        LLCoros::instance().rethrow();
+    }
+
+    // Full idle pass - network, media, timers, everything the old
+    // single-threaded doFrame ran.
+    {
+        pingMainloopTimeout("vt idle");
+        pauseMainloopTimeout();
+    }
+    {
+        LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt idle");
+        idle();
+    }
+    {
+        resumeMainloopTimeout("vt idle");
+    }
+
+    // Disconnect runs here, not in doFrame - saveFinalSnapshot renders
+    // (rawSnapshot -> display) and disconnectViewer tears down world
+    // state, both of which belong to us.
+    if (gDoDisconnect && (LLStartUp::getStartupState() == STATE_STARTED))
+    {
+        pauseMainloopTimeout();
+        saveFinalSnapshot();
+
+        if (LLVoiceClient::instanceExists())
+        {
+            LLVoiceClient::getInstance()->terminate();
+        }
+
+        disconnectViewer();
+        resumeMainloopTimeout("vt snapshot n disconnect");
+    }
+
+    renderViewerFrame();
+
+    if (LLViewerStatsRecorder::instanceExists())
+    {
+        LLViewerStatsRecorder::instance().idle();
+    }
+
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt pauseMainloopTimeout");
+        pingMainloopTimeout("Main:Sleep");
+        pauseMainloopTimeout();
+    }
+
+    // Sleep and run background threads
+    {
+        LL_PROFILE_ZONE_WARN("Sleep2");
+
+        // yield some time to the os based on command line option
+        static LLCachedControl<S32> yield_time(gSavedSettings, "YieldTime", -1);
+        if (yield_time >= 0)
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("Yield");
+            LL_PROFILE_ZONE_NUM(yield_time);
+            ms_sleep(yield_time);
+        }
+
+        if (gNonInteractive)
+        {
+            S32 non_interactive_ms_sleep_time = 100;
+            LLAppViewer::getTextureCache()->pause();
+            ms_sleep(non_interactive_ms_sleep_time);
+        }
+
+        // yield cooperatively when not running as foreground window
+        // and when not quiting (causes trouble at mac's cleanup stage)
+        if (!LLApp::isExiting()
+            && ((gViewerWindow && !gViewerWindow->getWindow()->getVisible())
+                || !gFocusMgr.getAppHasFocus()))
+        {
+            // Sleep if we're not rendering, or the window is minimized.
+            static LLCachedControl<S32> s_background_yield_time(gSavedSettings, "BackgroundYieldTime", 40);
+            S32 milliseconds_to_sleep = llclamp((S32)s_background_yield_time, 0, 1000);
+            // don't sleep when BackgroundYieldTime set to 0, since this will still yield to other threads
+            // of equal priority on Windows
+            if (milliseconds_to_sleep > 0)
+            {
+                LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SLEEP );
+                ms_sleep(milliseconds_to_sleep);
+                // also pause worker threads during this wait period
+                LLAppViewer::getTextureCache()->pause();
+            }
+        }
+
+        if (mRandomizeFramerate)
+        {
+            ms_sleep(rand() % 200);
+        }
+
+        if (mPeriodicSlowFrame
+            && (gFrameCount % 10 == 0))
+        {
+            LL_INFOS() << "Periodic slow frame - sleeping 500 ms" << LL_ENDL;
+            ms_sleep(500);
+        }
+
+        S32 total_work_pending = 0;
+        S32 total_io_pending = 0;
+        {
+            S32 work_pending = 0;
+            S32 io_pending = 0;
+            F32 max_time = llmin(gFrameIntervalSeconds.value() *10.f, 1.f);
+
+            work_pending += updateTextureThreads(max_time);
+
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("LFS Thread");
+                io_pending += LLLFSThread::updateClass(1);
+            }
+
+            if (io_pending > 1000)
+            {
+                ms_sleep(llmin(io_pending/100,100)); // give the lfs some time to catch up
+            }
+
+            total_work_pending += work_pending ;
+            total_io_pending += io_pending ;
+        }
+
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt gMeshRepo");
+            gMeshRepo.update() ;
+        }
+
+        if(!total_work_pending) //pause texture fetching threads if nothing to process.
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt getTextureCache");
+            LLAppViewer::getTextureCache()->pause();
+            LLAppViewer::getTextureFetch()->pause();
+        }
+        if(!total_io_pending) //pause file threads if nothing to process.
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt LLVFSThread");
+            LLLFSThread::sLocal->pause();
+        }
+
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("vt resumeMainloopTimeout");
+            resumeMainloopTimeout();
+        }
+        pingMainloopTimeout("Main:End");
+    }
+
+    LLPerfStats::StatsRecorder::endFrame();
+}
+
+void LLAppViewer::viewerThreadShutdown()
+{
+    // The tail of the old main loop, run by the viewer thread (or its
+    // inline stand-in) on the way out, while the world and GL are still
+    // intact.
+
+    // Save the login-screen snapshot for next time. No-op if the
+    // disconnect path already saved one.
+    if (LLStartUp::getStartupState() == STATE_STARTED)
+    {
+        saveFinalSnapshot();
+    }
+
+    if (LLVoiceClient::instanceExists())
+    {
+        LLVoiceClient::getInstance()->terminate();
+    }
+
+    // LLTrace recordings have to deactivate on this thread - they're
+    // registered with this thread's recorder, which LLThread deletes
+    // when we exit. Stopped recordings are safe to destroy from any
+    // thread later, so singletons that outlive us just get their
+    // recordings stopped here.
+    if (LLSceneMonitor::instanceExists())
+    {
+        if (!isSecondInstance())
+        {
+            std::string dump_path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "scene_monitor_results.csv");
+            LLSceneMonitor::instance().dumpToFile(dump_path);
+        }
+        LLSceneMonitor::deleteSingleton();
+    }
+    LLViewerAssetStatsFF::cleanup();
+    if (LLViewerStats::instanceExists())
+    {
+        LLViewerStats::instance().getRecording().stop();
+    }
+
+    delete gServicePump;
+    gServicePump = NULL;
+
+    destroyMainloopTimeout();
+}
+
+void LLAppViewer::renderViewerFrame()
+{
+    // Render into the back buffer, then publish it through the mailbox.
+    // The compositor presents on its own clock; we never wait on it.
+
+    // Only publish if a render path actually drew into the back buffer
+    // this tick. If nothing drew, the compositor just keeps showing the
+    // last good frame.
+    mBackBufferRendered = false;
+
+    // For the world render, a top-level parentless flush is a missed
+    // bind site (the back buffer should be the bottom of the stack), so
+    // assert. Outside this scope - standalone GPU passes like avatar
+    // profiling run from idle() - parentless flushes are legitimate and
+    // fall back to the default framebuffer.
+    LLRenderTarget::sFlushRequiresParent = true;
+
+    // Wait GPU-side until the compositor is done reading the buffer we
+    // just picked up as our new back.
+    getBackBuffer().waitReadCompleteFence();
+
+    display();
+
+    LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
+    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
+    pingMainloopTimeout("Main:Snapshot");
+
+    // The updaters need a parent on the RT stack to pop back to, but it
+    // can't be the back buffer - cubeSnapshot clears whatever's bound,
+    // which would wipe the frame we just rendered. Give them the scratch
+    // parent instead.
+    bool scratch_bound = false;
+    if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
+    {
+        mScratchParent.bindTarget();
+        scratch_bound = true;
+    }
+
+    gPipeline.mReflectionMapManager.update();
+    LLFloaterSnapshot::update();
+    LLFloaterSimpleSnapshot::update();
+
+    if (scratch_bound &&
+        LLRenderTarget::getCurrentBoundTarget() == &mScratchParent)
+    {
+        mScratchParent.flush();
+    }
+
+    llassert(LLRenderTarget::getCurrentBoundTarget() == nullptr);
+
+    // The one publish for this tick. Skip it if nothing drew into the
+    // back buffer, or if the snapshot machinery cleared
+    // gDisplaySwapBuffers to keep a readback-only frame off the screen.
+    if (mBackBufferRendered && gDisplaySwapBuffers)
+    {
+        markFrameRendered();
+    }
+    gDisplaySwapBuffers = true;
+
+    // Back out of the world-render scope; standalone passes that run
+    // before the next renderViewerFrame may flush parentless.
+    LLRenderTarget::sFlushRequiresParent = false;
+}
+
 class LLUITranslationBridge : public LLTranslationBridge
 {
 public:
@@ -750,6 +1280,10 @@ public:
 bool LLAppViewer::init()
 {
     LL_PROFILE_ZONE_SCOPED;
+
+    // Remember which thread is the OS main thread before we spawn any
+    // others, so OS-main-thread checks have something to compare against.
+    set_os_main_thread();
 
     setupErrorHandling(mSecondInstance);
 
@@ -1208,11 +1742,26 @@ bool LLAppViewer::init()
 
     LLAgentLanguage::init();
 
-    /// Tell the Coprocedure manager how to discover and store the pool sizes
-    // what I wanted
-    LLCoprocedureManager::getInstance()->setPropertyMethods(
-        std::bind(&LLControlGroup::getU32, std::ref(gSavedSettings), std::placeholders::_1),
-        std::bind(&LLControlGroup::declareU32, std::ref(gSavedSettings), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, LLControlVariable::PERSIST_ALWAYS));
+    /// Tell the Coprocedure manager how to discover and store the pool
+    /// sizes. This also launches the coroutine pools, and coroutines
+    /// stay on the thread that launches them. They touch inventory and
+    /// UI state that lives on the viewer thread, so by default we defer
+    /// the launch there via gViewerWork. CoroutinePoolsOnViewerThread
+    /// set to false keeps the old inline launch for experiments.
+    auto init_coproc_pools = []()
+    {
+        LLCoprocedureManager::getInstance()->setPropertyMethods(
+            std::bind(&LLControlGroup::getU32, std::ref(gSavedSettings), std::placeholders::_1),
+            std::bind(&LLControlGroup::declareU32, std::ref(gSavedSettings), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, LLControlVariable::PERSIST_ALWAYS));
+    };
+    if (gSavedSettings.getBOOL("CoroutinePoolsOnViewerThread"))
+    {
+        gViewerWork.post(init_coproc_pools);
+    }
+    else
+    {
+        init_coproc_pools();
+    }
 
     // TODO: consider moving proxy initialization here or LLCopocedureManager after proxy initialization, may be implement
     // some other protection to make sure we don't use network before initializng proxy
@@ -1252,6 +1801,20 @@ bool LLAppViewer::init()
         gDirUtilp->deleteDirAndContents(gDirUtilp->getDumpLogsDirPath());
     }
 #endif
+
+    // Init is done - spawn the viewer thread. From here on the viewer
+    // runs on its own thread and OS main just composites and pumps
+    // events. Windows only for now; other platforms stay single
+    // threaded.
+#if LL_WINDOWS
+    if (gViewerWindow && gViewerWindow->getWindow())
+    {
+        mViewerThread = std::make_unique<LLViewerThread>(gViewerWindow->getWindow());
+        mViewerThread->start();
+        LL_INFOS("Viewer") << "Viewer thread spawned." << LL_ENDL;
+    }
+#endif
+
     LL_PROFILER_FRAME_END;
     return true;
 }
@@ -1326,358 +1889,97 @@ bool LLAppViewer::frame()
 
 bool LLAppViewer::doFrame()
 {
-    resumeMainloopTimeout("Main:doFrameStart");
-#ifdef LL_DISCORD
-    {
-        LL_PROFILE_ZONE_NAMED("discord_callbacks");
-        discordpp::RunCallbacks();
-    }
-#endif
-
+    // OS main owns exactly three things: the OS-affine work queue, the
+    // compositor present, and standing in for the viewer thread when it
+    // isn't spawned. Everything else from the old main loop lives in
+    // viewerThreadTick / viewerThreadShutdown.
     LL_RECORD_BLOCK_TIME(FTM_FRAME);
     LL_PROFILE_GPU_ZONE("Frame");
-    {
-    // and now adjust the visuals from previous frame.
-    if(LLPerfStats::tunables.userAutoTuneEnabled && LLPerfStats::tunables.tuningFlag != LLPerfStats::Tunables::Nothing)
-    {
-        LLPerfStats::tunables.applyUpdates();
-    }
 
-    LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_FRAME);
-    if (!LLWorld::instanceExists())
+    if (!LLApp::isExiting())
     {
-        LLWorld::createInstance();
-    }
-
-    LLEventPump& mainloop(LLEventPumps::instance().obtain("mainloop"));
-    LLSD newFrame;
-    {
-        LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_IDLE); // perf stats
+        // No viewer thread? Run the whole viewer tick inline here
+        // instead - same function the viewer thread would run.
+        if (!mViewerThread)
         {
-            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df LLTrace");
-            if (LLFloaterReg::instanceVisible("block_timers"))
-            {
-                LLTrace::BlockTimer::processTimes();
-            }
-
-            LLTrace::get_frame_recording().nextPeriod();
-            LLTrace::BlockTimer::logStats();
+            viewerThreadTick();
         }
 
-        LLTrace::get_thread_recorder()->pullFromChildren();
-
-        //clear call stack records
-        LL_CLEAR_CALLSTACKS();
-    }
-    {
+        // Drain work that has to run on the OS main thread, like
+        // splash screen teardown.
         {
-            LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE); // ensure we have the entire top scope of frame covered (input event and coro)
-            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df processMiscNativeEvents")
-            pingMainloopTimeout("Main:MiscNativeWindowEvents");
-
-            if (gViewerWindow)
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("System Messages");
-                gViewerWindow->getWindow()->processMiscNativeEvents();
-            }
-
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df gatherInput")
-                pingMainloopTimeout("Main:GatherInput");
-            }
-
-            if (gViewerWindow)
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("System Messages");
-                if (!restoreErrorTrap())
-                {
-                    LL_WARNS() << " Someone took over my signal/exception handler (post messagehandling)!" << LL_ENDL;
-                }
-
-                gViewerWindow->getWindow()->gatherInput();
-            }
-
-            //memory leaking simulation
-            if (gSimulateMemLeak)
-            {
-                LLFloaterMemLeak* mem_leak_instance =
-                    LLFloaterReg::findTypedInstance<LLFloaterMemLeak>("mem_leaking");
-                if (mem_leak_instance)
-                {
-                    mem_leak_instance->idle();
-                }
-            }
-
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df mainloop");
-                pingMainloopTimeout("df mainloop");
-                // canonical per-frame event
-                mainloop.post(newFrame);
-            }
-
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df suspend");
-                pingMainloopTimeout("df suspend");
-                // give listeners a chance to run
-                llcoro::suspend();
-                // if one of our coroutines threw an uncaught exception, rethrow it now
-                LLCoros::instance().rethrow();
-            }
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df osmain work");
+            static std::chrono::nanoseconds kOSMainWorkTime{1'000'000}; // 1ms slice
+            gOSMainWork.runFor(kOSMainWorkTime);
         }
 
-        if (!LLApp::isExiting())
+        if (!gHeadlessClient && gViewerWindow)
         {
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df JoystickKeyboard");
-                pingMainloopTimeout("Main:JoystickKeyboard");
+            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Display");
+            gGLActive = true;
 
-                // Scan keyboard for movement keys.  Command keys and typing
-                // are handled by windows callbacks.  Don't do this until we're
-                // done initializing.  JC
-                if (gViewerWindow
-                    && (gHeadlessClient || gViewerWindow->getWindow()->getVisible())
-                    && gViewerWindow->getActive()
-                    && !gViewerWindow->getWindow()->getMinimized()
-                    && LLStartUp::getStartupState() == STATE_STARTED
-                    && (gHeadlessClient || !gViewerWindow->getShowProgress())
-                    && !gFocusMgr.focusLocked())
-                {
-                    LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
-                    joystick->scanJoystick();
-                    gKeyboard->scanKeyboard();
-                    gViewerInput.scanMouse();
-                }
-            }
+            // The viewer renders at its own rate; the compositor
+            // presents every doFrame, re-showing the last frame when
+            // nothing new arrived. Neither side waits on the other -
+            // swapBuffers (vsync) is the only pacing here.
+            mCompositor.presentFrame();
 
-            // Update state based on messages, user input, object idle.
-            {
-                {
-                    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df pauseMainloopTimeout");
-                    pingMainloopTimeout("df idle"); // So that it will be aware of last state.
-                    pauseMainloopTimeout(); // *TODO: Remove. Messages shouldn't be stalling for 20+ seconds!
-                }
-
-                {
-                    LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_IDLE);
-                    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df idle");
-                    idle();
-                }
-
-                {
-                    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df resumeMainloopTimeout");
-                    resumeMainloopTimeout("df idle");
-                }
-            }
-
-            if (gDoDisconnect && (LLStartUp::getStartupState() == STATE_STARTED))
-            {
-                pauseMainloopTimeout();
-                saveFinalSnapshot();
-
-                if (LLVoiceClient::instanceExists())
-                {
-                    LLVoiceClient::getInstance()->terminate();
-                }
-
-                disconnectViewer();
-                resumeMainloopTimeout("df snapshot n disconnect");
-            }
-
-            // Render scene.
-            // *TODO: Should we run display() even during gHeadlessClient?  DK 2011-02-18
-            if (!LLApp::isExiting() && !gHeadlessClient && gViewerWindow)
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Display");
-                pingMainloopTimeout("Main:Display");
-                gGLActive = true;
-
-                display();
-
-                {
-                    LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
-                    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
-                    pingMainloopTimeout("Main:Snapshot");
-
-                    // These updaters allocate and bind their own render
-                    // targets while no parent target is on the stack. Bind
-                    // the swap chain image around the calls so they pop back
-                    // to it instead of tripping the missing-parent assert in
-                    // LLRenderTarget::flush(). Only wrap when the stack is
-                    // empty -- these updaters can recurse into display() (e.g.
-                    // snapshot live preview -> rawSnapshot -> display) which
-                    // may bring its own parent.
-                    bool sc_bound = false;
-                    if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
-                    {
-                        mSwapChain.acquireNextImage().bindTarget();
-                        sc_bound = true;
-                    }
-
-                    gPipeline.mReflectionMapManager.update();
-                    LLFloaterSnapshot::update(); // take snapshots
-                    LLFloaterSimpleSnapshot::update();
-
-                    if (sc_bound &&
-                        LLRenderTarget::getCurrentBoundTarget() == &mSwapChain.getCurrentImage())
-                    {
-                        // Only flush if our bind is still on top. Updaters
-                        // can internally call swap() (e.g. rawSnapshot's
-                        // non-deferred path), which will already have flushed
-                        // the image.
-                        mSwapChain.getCurrentImage().flush();
-                    }
-
-                    gGLActive = false;
-                }
-
-                if (LLViewerStatsRecorder::instanceExists())
-                {
-                    LLViewerStatsRecorder::instance().idle();
-                }
-            }
-        }
-
-        {
-            LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df pauseMainloopTimeout");
-            pingMainloopTimeout("Main:Sleep");
-
-            pauseMainloopTimeout();
-        }
-
-        // Sleep and run background threads
-        {
-            //LL_RECORD_BLOCK_TIME(SLEEP2);
-            LL_PROFILE_ZONE_WARN("Sleep2");
-
-            // yield some time to the os based on command line option
-            static LLCachedControl<S32> yield_time(gSavedSettings, "YieldTime", -1);
-            if(yield_time >= 0)
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("Yield");
-                LL_PROFILE_ZONE_NUM(yield_time);
-                ms_sleep(yield_time);
-            }
-
-            if (gNonInteractive)
-            {
-                S32 non_interactive_ms_sleep_time = 100;
-                LLAppViewer::getTextureCache()->pause();
-                ms_sleep(non_interactive_ms_sleep_time);
-            }
-
-            // yield cooperatively when not running as foreground window
-            // and when not quiting (causes trouble at mac's cleanup stage)
-            if (!LLApp::isExiting()
-                && ((gViewerWindow && !gViewerWindow->getWindow()->getVisible())
-                    || !gFocusMgr.getAppHasFocus()))
-            {
-                // Sleep if we're not rendering, or the window is minimized.
-                static LLCachedControl<S32> s_background_yield_time(gSavedSettings, "BackgroundYieldTime", 40);
-                S32 milliseconds_to_sleep = llclamp((S32)s_background_yield_time, 0, 1000);
-                // don't sleep when BackgroundYieldTime set to 0, since this will still yield to other threads
-                // of equal priority on Windows
-                if (milliseconds_to_sleep > 0)
-                {
-                    LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SLEEP );
-                    ms_sleep(milliseconds_to_sleep);
-                    // also pause worker threads during this wait period
-                    LLAppViewer::getTextureCache()->pause();
-                }
-            }
-
-            if (mRandomizeFramerate)
-            {
-                ms_sleep(rand() % 200);
-            }
-
-            if (mPeriodicSlowFrame
-                && (gFrameCount % 10 == 0))
-            {
-                LL_INFOS() << "Periodic slow frame - sleeping 500 ms" << LL_ENDL;
-                ms_sleep(500);
-            }
-
-            S32 total_work_pending = 0;
-            S32 total_io_pending = 0;
-            {
-                S32 work_pending = 0;
-                S32 io_pending = 0;
-                F32 max_time = llmin(gFrameIntervalSeconds.value() *10.f, 1.f);
-
-                work_pending += updateTextureThreads(max_time);
-
-                {
-                    LL_PROFILE_ZONE_NAMED_CATEGORY_APP("LFS Thread");
-                    io_pending += LLLFSThread::updateClass(1);
-                }
-
-                if (io_pending > 1000)
-                {
-                    ms_sleep(llmin(io_pending/100,100)); // give the lfs some time to catch up
-                }
-
-                total_work_pending += work_pending ;
-                total_io_pending += io_pending ;
-
-            }
-
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df gMeshRepo");
-                gMeshRepo.update() ;
-            }
-
-            if(!total_work_pending) //pause texture fetching threads if nothing to process.
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df getTextureCache");
-                LLAppViewer::getTextureCache()->pause();
-                LLAppViewer::getTextureFetch()->pause();
-            }
-            if(!total_io_pending) //pause file threads if nothing to process.
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df LLVFSThread");
-                LLLFSThread::sLocal->pause();
-            }
-
-            {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df resumeMainloopTimeout");
-                resumeMainloopTimeout();
-            }
-            pingMainloopTimeout("Main:End");
+            gGLActive = false;
         }
     }
-
-    if (LLApp::isExiting())
+    else
     {
-        pingMainloopTimeout("Main:qSnapshot");
-        // Save snapshot for next time, if we made it through initialization
-        if (STATE_STARTED == LLStartUp::getStartupState())
+        // The threaded viewer runs its shutdown (final snapshot, voice,
+        // service pump, watchdog) on its way out of LLViewerThread::run
+        // when cleanup joins it. Without a viewer thread, we're the
+        // acting viewer thread - do it here.
+        if (!mViewerThread)
         {
-            saveFinalSnapshot();
+            viewerThreadShutdown();
         }
-
-        pingMainloopTimeout("Main:TerminateVoice");
-        if (LLVoiceClient::instanceExists())
-        {
-            LLVoiceClient::getInstance()->terminate();
-        }
-
-        pingMainloopTimeout("Main:TerminatePump");
-        delete gServicePump;
-        gServicePump = NULL;
-
-        destroyMainloopTimeout();
-
         LL_INFOS() << "Exiting main_loop" << LL_ENDL;
     }
-    }LLPerfStats::StatsRecorder::endFrame();
 
-    // Not viewer's fault if something outside frame
-    // pauses viewer (ex: macOS doesn't call oneFrame),
-    // so stop tracking on exit.
-    pauseMainloopTimeout();
     LL_PROFILER_FRAME_END;
 
     return ! LLApp::isRunning();
+}
+
+S32 LLAppViewer::getDisplayRefreshRate() const
+{
+    // Platform-detected rate of the display the window is on.
+    if (gViewerWindow && gViewerWindow->getWindow())
+    {
+        return gViewerWindow->getWindow()->getRefreshRate();
+    }
+    return 0;
+}
+
+void LLAppViewer::setVSyncMode(U32 mode)
+{
+    mode = llclamp(mode, 0u, 4u);
+
+    // The driver does the pacing: swap interval N presents every Nth
+    // vblank, and the sync signal (and the world with it) inherits that
+    // cadence. Mode 0 still presents every vblank - only the world runs
+    // free. The compositor applies it on its own context.
+    mCompositor.setSwapInterval(mode >= 1 ? (S32)mode : 1);
+
+    LLPerfStats::tunables.vsyncEnabled = (mode > 0);
+    if (mode > 0)
+    {
+        // Tell the autotuner the effective frame rate vsync allows
+        // (refresh / mode). It caps its target at min(this, TargetFPS)
+        // live, so it won't chase an unreachable FPS and degrade quality
+        // for nothing. We do NOT rewrite the user's persisted TargetFPS -
+        // that's their preference, and capping it here would ratchet it
+        // down permanently.
+        S32 refresh = getDisplayRefreshRate();
+        if (refresh > 0)
+        {
+            LLPerfStats::vsync_max_fps = (U32)(refresh / mode);
+        }
+    }
 }
 
 S32 LLAppViewer::updateTextureThreads(F32 max_time)
@@ -1728,6 +2030,23 @@ bool LLAppViewer::cleanup()
     velopack_cleanup();
 #endif
 
+    // Stop the viewer thread FIRST - everything below tears down state
+    // its tick is actively using (display, idle, network, render
+    // targets). It finishes its current tick over still-intact state
+    // and exits; shutdown() joins. It destroys its GL context on its
+    // own thread on the way out, since WGL requires that.
+    if (mViewerThread)
+    {
+        mViewerThread->requestStop();
+        mViewerThread->shutdown();
+        mViewerThread.reset();
+
+        // With the thread gone, OS main is the acting viewer thread for
+        // the rest of cleanup - window/render calls below would trip
+        // on_viewer_thread() asserts against a dead thread id otherwise.
+        clear_viewer_thread();
+    }
+
     //ditch LLVOAvatarSelf instance
     gAgentAvatarp = NULL;
 
@@ -1736,16 +2055,9 @@ bool LLAppViewer::cleanup()
     // workaround for DEV-35406 crash on shutdown
     LLEventPumps::instance().reset(true);
 
-    //dump scene loading monitor results
-    if (LLSceneMonitor::instanceExists())
-    {
-        if (!isSecondInstance())
-        {
-            std::string dump_path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "scene_monitor_results.csv");
-            LLSceneMonitor::instance().dumpToFile(dump_path);
-        }
-        LLSceneMonitor::deleteSingleton();
-    }
+    // Scene monitor and asset stats were torn down by the viewer thread
+    // on its way out (viewerThreadShutdown) - their LLTrace recordings
+    // belong to that thread's recorder.
 
     // There used to be an 'if (LLFastTimerView::sAnalyzePerformance)' block
     // here, completely redundant with the one that occurs later in this same
@@ -2061,9 +2373,11 @@ bool LLAppViewer::cleanup()
 
     LL_INFOS() << "Shutting down OpenGL" << LL_ENDL;
 
-    // Drop the swap chain before window teardown -- its images are bound to
+    // Drop LLAppViewer's render targets and the compositor (which owns the
+    // swap chain) before window teardown - their resources are bound to
     // the OS window and must not outlive it.
-    mSwapChain.release();
+    releaseRenderTargets();
+    mCompositor.release();
 
     // Shut down OpenGL
     if (gViewerWindow)
@@ -2154,8 +2468,6 @@ bool LLAppViewer::cleanup()
     LLUIColorTable::instance().clear();
 
     LLWatchdog::getInstance()->cleanup();
-
-    LLViewerAssetStatsFF::cleanup();
 
     // If we're exiting to launch an URL, do that here so the screen
     // is at the right resolution before we launch IE.
@@ -2342,7 +2654,7 @@ void errorHandler(const std::string& title_string, const std::string& message_st
     }
     if (!message_string.empty())
     {
-        if (on_main_thread())
+        if (on_viewer_thread())
         {
             // Prevent watchdog from killing us while dialog is up.
             // Can't do pauseMainloopTimeout, since this may be called
@@ -3400,12 +3712,31 @@ bool LLAppViewer::initWindow()
     stop_glerror();
     gViewerWindow->initGLDefaults();
 
-    // Stand up the presentation swap chain now that GL is up. From here on the
-    // viewer acquires an image from this chain each frame instead of touching
-    // FBO 0 directly.
-    mSwapChain.attachToWindow(gViewerWindow->getWindow(),
-                              gViewerWindow->getWindowWidthRaw(),
-                              gViewerWindow->getWindowHeightRaw());
+    // Stand up the compositor on OS main and register ourselves as the
+    // compositable. The render targets get allocated later by the viewer
+    // thread once its own context is current.
+    {
+        const U32 w = gViewerWindow->getWindowWidthRaw();
+        const U32 h = gViewerWindow->getWindowHeightRaw();
+        mCompositor.attachToWindow(gViewerWindow->getWindow(), w, h);
+        mCompositor.addCompositable(this);
+
+        // Shader objects are shared across the context share group, so
+        // the compositor can use this program from the OS main thread.
+        mCompositor.setBlitShader(&gCompositorBlitProgram);
+
+        // Sync ticks feed the vsync pacing gate in viewerThreadTick.
+        mSyncConnection = mCompositor.onSync(
+            [this](U64 frame_index) { mSyncTicks.tryPush(frame_index); });
+
+        // Seed the vsync mode; the compositor applies the interval on
+        // its own context at the first present.
+        setVSyncMode(gSavedSettings.getU32("RenderVSyncMode"));
+
+        // Seed the refresh overlay (Develop > Show Info > Show
+        // Compositor Refresh).
+        mCompositor.setShowRefreshOverlay(gSavedSettings.getBOOL("RenderCompositorShowRefresh"));
+    }
 
     gSavedSettings.setBOOL("RenderInitError", false);
     gSavedSettings.saveToFile( gSavedSettings.getString("ClientSettingsFile"), true );
@@ -5170,6 +5501,14 @@ void LLAppViewer::idle()
     static std::chrono::nanoseconds MainWorkTimeNanoSec{
         std::chrono::nanoseconds::rep(MainWorkTimeMs.value() * 1000000)};
     gMainloopWork.runFor(MainWorkTimeNanoSec);
+
+    // Drain gViewerWork here while no viewer thread exists yet -
+    // texture-sync callbacks start posting to it early in init, and
+    // somebody has to process them or texture cache init stalls.
+    if (!mViewerThread)
+    {
+        gViewerWork.runFor(MainWorkTimeNanoSec);
+    }
 
     // Cap out-of-control frame times
     // Too low because in menus, swapping, debugger, etc.

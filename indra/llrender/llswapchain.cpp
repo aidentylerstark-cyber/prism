@@ -31,6 +31,7 @@
 #include "llgl.h"
 #include "llwindow.h"
 
+
 LLSwapChain::~LLSwapChain()
 {
     release();
@@ -72,7 +73,7 @@ void LLSwapChain::resize(U32 width, U32 height)
 {
     if (width == 0 || height == 0)
     {
-        return; // minimized / iconified -- keep existing storage
+        return; // minimized / iconified - keep existing storage
     }
 
     mWidth  = width;
@@ -88,8 +89,8 @@ LLRenderTarget& LLSwapChain::acquireNextImage()
 {
     llassert(!mImages.empty());
 
-    // Rotate to the next image. GL has no real "acquire" -- the driver owns
-    // the back buffer rotation under SwapBuffers -- so this is just structural
+    // Rotate to the next image. GL has no real "acquire" - the driver owns
+    // the back buffer rotation under SwapBuffers - so this is just structural
     // cycling. Vk/XR backends will do the real WSI acquire here.
     mCurrentIndex = (mCurrentIndex + 1) % (U32)mImages.size();
     return mImages[mCurrentIndex];
@@ -121,8 +122,7 @@ void LLSwapChain::present()
     {
         LL_PROFILE_GPU_ZONE("swapchain present blit");
 
-        // Hold a shared lease on the image across the blit -- getFBO is
-        // snapshot-return, the value must stay valid for the call.
+        // Hold a shared lease on the image while we blit from it.
         LLSharedLease img_lease = img.getSharedLease();
 
         // Save current read FB so we don't disturb anyone else's state.
@@ -142,6 +142,12 @@ void LLSwapChain::present()
         glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
     }
 
+    mWindow->swapBuffers();
+}
+
+void LLSwapChain::presentDirect()
+{
+    llassert(mWindow != nullptr);
     mWindow->swapBuffers();
 }
 

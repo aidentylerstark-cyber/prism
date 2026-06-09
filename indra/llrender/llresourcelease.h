@@ -29,10 +29,9 @@
 
 class LLGPUResource;
 
-// RAII shared lease: many concurrent holders allowed, blocks while a unique
-// lease is held. Non-copyable, movable. Same-thread release (std::shared_mutex
-// contract). Non-recursive -- a thread already holding a lease on the same
-// resource must not acquire another, including via subroutines.
+// RAII shared lease: many holders at once, blocks while a unique lease is
+// held. Non-recursive - don't take another lease on the same resource
+// while you hold one, including via subroutines.
 class LLSharedLease
 {
 public:

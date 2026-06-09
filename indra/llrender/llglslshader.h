@@ -165,8 +165,9 @@ public:
     LLGLSLShader();
     ~LLGLSLShader();
 
-    static GLuint sCurBoundShader;
-    static LLGLSLShader* sCurBoundShaderPtr;
+    // Current-program mirror - per-GL-context, so thread_local.
+    static thread_local GLuint sCurBoundShader;
+    static thread_local LLGLSLShader* sCurBoundShaderPtr;
     static S32 sIndexedTextureChannels;
 
     static U32 sMaxGLTFMaterials;

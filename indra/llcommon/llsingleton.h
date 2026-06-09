@@ -32,7 +32,7 @@
 #include <vector>
 #include "mutex.h"
 #include "lockstatic.h"
-#include "llthread.h"               // on_main_thread()
+#include "llthread.h"               // on_viewer_thread()
 #include "llmainthreadtask.h"
 #include "llprofiler.h"
 #include "llerror.h"
@@ -548,7 +548,7 @@ public:
             }
 
             // Here we need to construct a new instance.
-            if (on_main_thread())
+            if (on_viewer_thread())
             {
                 // On the main thread, directly construct the instance while
                 // holding the lock.
@@ -657,7 +657,7 @@ private:
                            " twice!"});
             return nullptr;
         }
-        else if (on_main_thread())
+        else if (on_viewer_thread())
         {
             // on the main thread, simply construct instance while holding lock
             super::logdebugs({super::template classname<DERIVED_TYPE>(),

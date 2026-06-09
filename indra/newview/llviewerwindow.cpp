@@ -224,6 +224,9 @@ extern bool gResizeScreenTexture;
 extern bool gCubeSnapshot;
 extern bool gSnapshotNoPost;
 
+#include "workqueue.h"
+extern LL::WorkQueue gMainloopWork;
+
 LLViewerWindow  *gViewerWindow = NULL;
 
 LLFrameTimer    gAwayTimer;
@@ -596,6 +599,28 @@ public:
         {
             LLTrace::Recording& last_frame_recording = LLTrace::get_frame_recording().getLastRecording();
 
+            // Compositor and per-compositable stats. addText stacks
+            // lines bottom-up, so we emit them in reverse order.
+            {
+                LLCompositor& compositor = LLAppViewer::instance()->getCompositor();
+                std::vector<LLCompositor::LayerStatsSnapshot> layer_stats;
+                compositor.getLayerStats(layer_stats);
+                for (auto it = layer_stats.rbegin(); it != layer_stats.rend(); ++it)
+                {
+                    addText(xpos, ypos, llformat("    %s: %.2f ms/%.0f FPS",
+                                                 it->name.c_str(),
+                                                 it->frameMs,
+                                                 it->fps));
+                    ypos += y_inc;
+                }
+                addText(xpos, ypos, std::string("Compositables:"));
+                ypos += y_inc;
+                addText(xpos, ypos, llformat("Compositor: %.2f ms/%.0f FPS",
+                                             compositor.getLastPresentMs(),
+                                             compositor.getPresentFps()));
+                ypos += y_inc;
+            }
+
             //show streaming cost/triangle count of known prims in current region OR selection
             {
                 F32 cost = 0.f;
@@ -943,6 +968,30 @@ public:
     void draw()
     {
         LL_RECORD_BLOCK_TIME(FTM_DISPLAY_DEBUG_TEXT);
+
+        // Draw a dark backdrop behind the debug text so it stays
+        // readable against bright scenes, same as the texture console.
+        if (!mLineList.empty())
+        {
+            const LLFontGL* font = LLFontGL::getFontMonospace();
+            const S32 line_height = (S32)font->getLineHeight();
+            S32 left   = S32_MAX;
+            S32 right  = S32_MIN;
+            S32 top    = S32_MIN;
+            S32 bottom = S32_MAX;
+            for (line_list_t::iterator iter = mLineList.begin();
+                 iter != mLineList.end(); ++iter)
+            {
+                const Line& line = *iter;
+                left   = llmin(left, line.x);
+                right  = llmax(right, line.x + (S32)font->getWidth(line.text));
+                top    = llmax(top, line.y);
+                bottom = llmin(bottom, line.y - line_height);
+            }
+            const S32 pad = 4;
+            mBackColor.setAlpha(0.5f);
+            gl_rect_2d(left - pad, top + pad, right + pad, bottom - pad, mBackColor, true);
+        }
 
         // Camera matrix text is hard to see again a white background
         // Add a dark background underneath the matrices for readability (contrast)
@@ -1975,7 +2024,7 @@ LLViewerWindow::LLViewerWindow(const Params& p)
         p.title, p.name, p.x, p.y, p.width, p.height, 0,
         p.fullscreen,
         gHeadlessClient,
-        gSavedSettings.getBOOL("RenderVSyncEnable"),
+        true,   // the compositor always presents vsynced; RenderVSyncMode paces the world
         !gHeadlessClient,
         p.ignore_pixel_depth,
         0,
@@ -2596,9 +2645,14 @@ void LLViewerWindow::reshape(S32 width, S32 height)
         mWindowRectRaw.mRight = mWindowRectRaw.mLeft + width;
         mWindowRectRaw.mTop = mWindowRectRaw.mBottom + height;
 
-        // Keep the presentation swap chain in sync with the window size so
-        // its image's viewport tracks the OS window.
-        LLAppViewer::instance()->getSwapChain().resize((U32)width, (U32)height);
+        // Resize the compositor right here since we're on its thread.
+        // The viewer's render targets belong to the viewer thread, so
+        // we post that resize over instead.
+        LLAppViewer::instance()->getCompositor().resize((U32)width, (U32)height);
+        U32 w_u = (U32)width, h_u = (U32)height;
+        gMainloopWork.post([w_u, h_u]() {
+            LLAppViewer::instance()->resizeRenderTargets(w_u, h_u);
+        });
 
         //glViewport(0, 0, width, height );
 
@@ -5304,6 +5358,10 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
                     render_ui(scale_factor, subfield);
                     swap();
                 }
+
+                // The rendered frame lives in our back buffer, not
+                // FBO 0, so read from there.
+                LLAppViewer::instance()->getBackBuffer().bindForRead();
 
                 for (U32 out_y = 0; out_y < read_height ; out_y++)
                 {

@@ -168,11 +168,20 @@ void display_startup()
 
     LLGLState::checkStates();
 
-    // Route startup-screen rendering through the swap chain so we never name
-    // FBO 0 here, AND so dynamic-texture updates below have a parent on the
-    // RT stack when they flush.
-    LLSwapChain& startup_sc = LLAppViewer::instance()->getSwapChain();
-    startup_sc.acquireNextImage().bindTarget();
+    // This function is invoked a good bit during startup. Ordering is
+    // important here, in order to avoid any cross threaded asserts
+    // since we're now running the viewer in its own thread. Skip the
+    // inline render when the back buffer is not yet ready for us.
+    if (!LLAppViewer::instance()->isBackBufferReady())
+    {
+        return;
+    }
+
+    // Render the startup screen into our back buffer. The dynamic
+    // texture updates below also need a parent on the RT stack when
+    // they flush.
+    LLRenderTarget& startup_rt = LLAppViewer::instance()->getBackBuffer();
+    startup_rt.bindTarget();
 
     if (frame_count++ > 1) // make sure we have rendered a frame first
     {
@@ -199,11 +208,13 @@ void display_startup()
 
     LLGLState::checkStates();
 
-    if (LLRenderTarget::getCurrentBoundTarget() == &startup_sc.getCurrentImage())
+    if (LLRenderTarget::getCurrentBoundTarget() == &startup_rt)
     {
-        startup_sc.getCurrentImage().flush();
+        startup_rt.flush();
     }
-    startup_sc.present();
+    // Just set the flag; the actual publish happens at the end of
+    // renderViewerFrame.
+    LLAppViewer::instance()->setBackBufferRendered("startup");
 
     glClear(GL_DEPTH_BUFFER_BIT);
 }
@@ -431,18 +442,9 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LL_DEBUGS("Window") << "Resizing window" << LL_ENDL;
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Resize Window");
         gGL.flush();
-        // Route the resize-skip black clear through the swap chain so we
-        // don't reach for FBO 0 here either. Only run when no other RT is on
-        // the stack -- snapshots set their own bottom-of-stack target.
-        LLSwapChain& sc = LLAppViewer::instance()->getSwapChain();
-        if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
-        {
-            LLRenderTarget& img = sc.acquireNextImage();
-            img.bindTarget();
-            img.clear(GL_COLOR_BUFFER_BIT);
-            img.flush();
-            sc.present();
-        }
+        // Don't publish anything this tick - leave the back buffer and
+        // the rendered flag alone, and the compositor will keep showing
+        // the last good frame instead of a black one.
         LLPipeline::refreshCachedSettings();
         gPipeline.resizeScreenTexture();
         gResizeScreenTexture = false;
@@ -714,17 +716,28 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     // Actually push all of our triangles to the screen.
     //
 
-    // Bind the OS window's presentation image as the bottom of the render
-    // target stack for this frame. Everything downstream -- dynamic-texture
-    // updates, pipeline G-buffers, lighting, post-proc ping-pongs,
-    // renderFinalize's fullscreen triangle, and the UI -- sits on top of this
-    // in the LLRenderTarget stack and pops back to it on flush. swap()
-    // flushes the image and calls present(). Snapshot renders go to their
-    // own off-screen target, so we skip the bind in that case.
-    LLSwapChain& swap_chain = LLAppViewer::instance()->getSwapChain();
-    if (!for_snapshot && LLRenderTarget::getCurrentBoundTarget() == nullptr)
+    // Nothing renders on the way out. The world render below is gated
+    // on isExiting anyway, but it would leave the back buffer bound
+    // with nothing to flush it - so don't bind it in the first place.
+    // The compositor keeps presenting the last published frame, and
+    // the final login-screen snapshot reads that same content.
+    if (LLApp::isExiting())
     {
-        swap_chain.acquireNextImage().bindTarget();
+        return;
+    }
+
+    // Bind our back buffer as the bottom of the render target stack for
+    // this frame. Everything downstream renders on top of it and pops
+    // back to it on flush. Snapshots render to their own off-screen
+    // target, so we skip the bind in that case. Nothing should still be
+    // bound from a previous frame at this point - hence the assert.
+    if (!for_snapshot)
+    {
+        llassert(LLRenderTarget::getCurrentBoundTarget() == nullptr);
+        if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
+        {
+            LLAppViewer::instance()->getBackBuffer().bindTarget();
+        }
     }
 
     // do render-to-texture stuff here
@@ -1586,24 +1599,25 @@ void render_ui(F32 zoom_factor, int subfield)
 
 void swap()
 {
-    LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SWAP ); // render time capture - Swap buffer time - can signify excessive data transfer to/from GPU
+    LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SWAP );
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Swap");
-    LL_PROFILE_GPU_ZONE("swap");
 
-    // Flush the swap chain's current image off the RT stack before presenting.
-    // The OS framebuffer stays bound (that's what present needs); this just
-    // pops the LLRenderTarget bookkeeping.
-    LLSwapChain& swap_chain = LLAppViewer::instance()->getSwapChain();
-    if (LLRenderTarget::getCurrentBoundTarget() == &swap_chain.getCurrentImage())
-    {
-        swap_chain.getCurrentImage().flush();
-    }
+    // Flush the back buffer off the RT stack and mark a fresh frame
+    // ready. The actual present happens later in doFrame.
+    LLRenderTarget& world_rt = LLAppViewer::instance()->getBackBuffer();
 
-    if (gDisplaySwapBuffers)
+    // By the time we get here, display() should have left our back
+    // buffer at the bottom of the stack. If not, something upstream
+    // didn't pop its render targets.
+    llassert(LLRenderTarget::getCurrentBoundTarget() == &world_rt);
+
+    if (LLRenderTarget::getCurrentBoundTarget() == &world_rt)
     {
-        swap_chain.present();
+        world_rt.flush();
     }
-    gDisplaySwapBuffers = true;
+    // Just set the flag here - we only publish once per frame, at the
+    // end of renderViewerFrame. Publishing twice gets us stale frames.
+    LLAppViewer::instance()->setBackBufferRendered("world");
 }
 
 void renderCoordinateAxes()

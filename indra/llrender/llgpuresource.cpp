@@ -35,14 +35,18 @@ LLGPUResource::~LLGPUResource()
     {
         return;
     }
-    // Verify no leases are live. If a holder outlives the resource, the
-    // destructor proceeds through dangling state -- UB.
-    // try_lock returns true iff no shared or exclusive lock is held.
-    llassert(mLeaseMutex->try_lock());
-    mLeaseMutex->unlock();
+    // Verify no leases are live.
+    if (mLeaseMutex->try_lock())
+    {
+        mLeaseMutex->unlock();
+    }
+    else
+    {
+        llassert(false); // a lease holder outlived this resource
+    }
 }
 
-// -- LLSharedLease ----------------------------------------------------------
+// - LLSharedLease ----------------------------------------------------------
 
 LLSharedLease::LLSharedLease(LLGPUResource* res)
     : mResource(res)
@@ -86,7 +90,7 @@ void LLSharedLease::release()
     }
 }
 
-// -- LLUniqueLease ----------------------------------------------------------
+// - LLUniqueLease ----------------------------------------------------------
 
 LLUniqueLease::LLUniqueLease(LLGPUResource* res)
     : mResource(res)

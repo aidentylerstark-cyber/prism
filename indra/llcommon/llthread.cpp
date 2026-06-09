@@ -98,15 +98,18 @@ void set_thread_name( DWORD dwThreadID, const char* threadName)
 namespace
 {
 
-    LLThread::id_t main_thread()
-    {
-        // Using a function-static variable to identify the main thread
-        // requires that control reach here from the main thread before it
-        // reaches here from any other thread. We simply trust that whichever
-        // thread gets here first is the main thread.
-        static LLThread::id_t s_thread_id = LLThread::currentID();
-        return s_thread_id;
-    }
+    // Thread identity anchors. A default-constructed thread id means
+    // "not set yet", so we don't need a separate flag.
+    //
+    // The viewer thread anchors itself at run() entry while other
+    // threads are already running and reading - atomic makes that
+    // intentional race well-defined.
+    std::atomic<LLThread::id_t> g_viewer_thread_id{};
+
+    // Set once on the OS main thread at init, before any thread that
+    // reads it exists - no atomic needed. Set explicitly rather than
+    // first-caller-wins since the viewer thread might get here first.
+    LLThread::id_t g_os_main_thread_id{};
 
 #if LL_WINDOWS
 
@@ -131,20 +134,61 @@ namespace
 #endif // LL_WINDOWS
 } // anonymous namespace
 
-LL_COMMON_API bool on_main_thread()
+LL_COMMON_API void set_viewer_thread()
 {
-    return (LLThread::currentID() == main_thread());
+    g_viewer_thread_id.store(LLThread::currentID(), std::memory_order_release);
 }
 
-LL_COMMON_API bool assert_main_thread()
+LL_COMMON_API void clear_viewer_thread()
 {
-    auto curr = LLThread::currentID();
-    auto main = main_thread();
-    if (curr == main)
+    g_viewer_thread_id.store(LLThread::id_t(), std::memory_order_release);
+}
+
+LL_COMMON_API bool on_viewer_thread()
+{
+    const LLThread::id_t id = g_viewer_thread_id.load(std::memory_order_acquire);
+    if (id == LLThread::id_t())
+    {
+        // The viewer thread hasn't spawned yet, so the OS main thread
+        // is still doing its job. Defer to that check.
+        return on_os_main_thread();
+    }
+    return (LLThread::currentID() == id);
+}
+
+LL_COMMON_API bool assert_viewer_thread()
+{
+    if (on_viewer_thread())
         return true;
 
-    LL_WARNS() << "Illegal execution from thread id " << curr
-               << " outside main thread " << main << LL_ENDL;
+    LL_WARNS() << "Illegal execution from thread id " << LLThread::currentID()
+               << " outside viewer thread "
+               << g_viewer_thread_id.load(std::memory_order_acquire) << LL_ENDL;
+    return false;
+}
+
+LL_COMMON_API void set_os_main_thread()
+{
+    g_os_main_thread_id = LLThread::currentID();
+}
+
+LL_COMMON_API bool on_os_main_thread()
+{
+    if (g_os_main_thread_id == LLThread::id_t())
+    {
+        // Not registered yet - give early init the benefit of the doubt.
+        return true;
+    }
+    return (LLThread::currentID() == g_os_main_thread_id);
+}
+
+LL_COMMON_API bool assert_os_main_thread()
+{
+    if (on_os_main_thread())
+        return true;
+
+    LL_WARNS() << "Illegal execution from thread id " << LLThread::currentID()
+               << " outside OS main thread " << g_os_main_thread_id << LL_ENDL;
     return false;
 }
 

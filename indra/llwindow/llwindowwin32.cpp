@@ -34,6 +34,7 @@
 #include "llkeyboardwin32.h"
 #include "lldragdropwin32.h"
 #include "llpreeditor.h"
+#include "llthread.h"            // for ASSERT_MAIN_THREAD
 #include "llwindowcallbacks.h"
 
 // Linden library includes
@@ -105,13 +106,14 @@ extern bool gDebugWindowProc;
 static std::thread::id sWindowThreadId;
 static std::thread::id sMainThreadId;
 
-#if 1 // flip to zero to enable assertions for functions being called from wrong thread
-#define ASSERT_MAIN_THREAD()
-#define ASSERT_WINDOW_THREAD()
-#else
-#define ASSERT_MAIN_THREAD() llassert(LLThread::currentID() == sMainThreadId)
+// "Main" here means the thread that runs the frame loop, which is the
+// viewer thread now. Before the viewer thread spawns this falls back to
+// OS main, so it works either way. The window message pump thread is
+// its own thing and keeps its own assert.
+// assert_viewer_thread() logs the offending thread id before failing,
+// which is what you want when hunting a wrong-thread call.
+#define ASSERT_MAIN_THREAD()   llassert(assert_viewer_thread())
 #define ASSERT_WINDOW_THREAD() llassert(LLThread::currentID() == sWindowThreadId)
-#endif
 
 
 LPWSTR gIconResource = IDI_APPLICATION;
@@ -2011,6 +2013,125 @@ void LLWindowWin32::toggleVSync(bool enable_vsync)
     }
 }
 
+#ifndef QDC_VIRTUAL_REFRESH_RATE_AWARE
+#define QDC_VIRTUAL_REFRESH_RATE_AWARE 0x00000040
+#endif
+
+// Signal rate of the active display path feeding the given GDI device,
+// via the CCD API. With QDC_VIRTUAL_REFRESH_RATE_AWARE this reports the
+// true rate on dynamic-refresh paths; without it, the base rate - the
+// two disagreeing is how we detect dynamic refresh.
+static F32 query_ccd_refresh_rate(const WCHAR* gdi_device, UINT32 extra_flags)
+{
+    UINT32 flags = QDC_ONLY_ACTIVE_PATHS | extra_flags;
+    UINT32 num_paths = 0;
+    UINT32 num_modes = 0;
+    if (GetDisplayConfigBufferSizes(flags, &num_paths, &num_modes) != ERROR_SUCCESS
+        || num_paths == 0)
+    {
+        return 0.f;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(num_paths);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(num_modes);
+    if (QueryDisplayConfig(flags, &num_paths, paths.data(),
+                           &num_modes, modes.data(), nullptr) != ERROR_SUCCESS)
+    {
+        return 0.f;
+    }
+    for (UINT32 i = 0; i < num_paths; ++i)
+    {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source = {};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = paths[i].sourceInfo.adapterId;
+        source.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) == ERROR_SUCCESS
+            && wcscmp(source.viewGdiDeviceName, gdi_device) == 0)
+        {
+            const DISPLAYCONFIG_RATIONAL& rr = paths[i].targetInfo.refreshRate;
+            if (rr.Numerator > 0 && rr.Denominator > 0)
+            {
+                return (F32)rr.Numerator / (F32)rr.Denominator;
+            }
+        }
+    }
+    return 0.f;
+}
+
+S32 LLWindowWin32::getRefreshRate()
+{
+    // Rate of the monitor the window is on right now, via the CCD API.
+    // Also notes whether the path runs dynamic refresh (virtual-aware
+    // and base queries disagree).
+    HMONITOR monitor = MonitorFromWindow(mWindowHandle, MONITOR_DEFAULTTONEAREST);
+    if (monitor)
+    {
+        MONITORINFOEXW mi;
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(monitor, &mi))
+        {
+            F32 aware_rate = query_ccd_refresh_rate(mi.szDevice, QDC_VIRTUAL_REFRESH_RATE_AWARE);
+            if (aware_rate > 1.f)
+            {
+                F32 base_rate = query_ccd_refresh_rate(mi.szDevice, 0);
+                mIsDynamicRefresh = (base_rate > 1.f)
+                    && (llround(aware_rate) != llround(base_rate));
+                mRefreshRate = (S32)llround(aware_rate);
+                return mRefreshRate;
+            }
+
+            // CCD unavailable: fall back to the highest mode this
+            // display supports at its current resolution.
+            mIsDynamicRefresh = false;
+            DEVMODEW current = {};
+            current.dmSize = sizeof(current);
+            if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &current))
+            {
+                S32 max_rate = (S32)current.dmDisplayFrequency;
+                for (DWORD i = 0; ; ++i)
+                {
+                    // Re-zero per call so a mode that omits a field
+                    // doesn't inherit the previous iteration's value.
+                    DEVMODEW dm = {};
+                    dm.dmSize = sizeof(dm);
+                    if (!EnumDisplaySettingsW(mi.szDevice, i, &dm))
+                    {
+                        break;
+                    }
+                    if (dm.dmPelsWidth == current.dmPelsWidth
+                        && dm.dmPelsHeight == current.dmPelsHeight
+                        && (S32)dm.dmDisplayFrequency > max_rate)
+                    {
+                        max_rate = (S32)dm.dmDisplayFrequency;
+                    }
+                }
+                if (max_rate > 1)
+                {
+                    mRefreshRate = max_rate;
+                }
+            }
+        }
+    }
+    return mRefreshRate;
+}
+
+bool LLWindowWin32::isDynamicRefreshRate()
+{
+    // Computed as a side effect of getRefreshRate().
+    return mIsDynamicRefresh;
+}
+
+void LLWindowWin32::setSwapInterval(S32 interval)
+{
+    if (wglSwapIntervalEXT == nullptr)
+    {
+        LL_INFOS("Window") << "setSwapInterval: wglSwapIntervalEXT not initialized" << LL_ENDL;
+        return;
+    }
+    LL_INFOS("Window") << "Swap interval: " << interval << LL_ENDL;
+    wglSwapIntervalEXT(llmax(interval, 0));
+}
+
 void LLWindowWin32::moveWindow( const LLCoordScreen& position, const LLCoordScreen& size )
 {
     if( mIsMouseClipping )
@@ -2047,8 +2168,10 @@ void LLWindowWin32::setTitle(const std::string title)
 
 bool LLWindowWin32::setCursorPosition(const LLCoordWindow position)
 {
-    ASSERT_MAIN_THREAD();
-
+    // Cursor state is OS-thread-owned: the cache write and the OS call
+    // both run on the window thread. Callers anywhere just route the
+    // request; the app sees the result through the normal mouse
+    // pipeline.
     if (!mWindowHandle)
     {
         return false;
@@ -2056,19 +2179,18 @@ bool LLWindowWin32::setCursorPosition(const LLCoordWindow position)
 
     LLCoordScreen screen_pos(position.convert());
 
-    // instantly set the cursor position from the app's point of view
-    mCursorPosition = position;
-    mLastCursorPosition = position;
+    // Publish the requested position so a same-frame getCursorPosition
+    // reflects the warp before the window thread applies it below. The
+    // cursor cache itself is still written only on the window thread.
+    mPendingWarp.store(((U64)(U32)position.mX << 32) | (U32)position.mY,
+                       std::memory_order_relaxed);
+    mHasPendingWarp.store(true, std::memory_order_release);
 
-    // Inform the application of the new mouse position (needed for per-frame
-    // hover/picking to function).
-    mCallbacks->handleMouseMove(this, position.convert(), (MASK)0);
-
-    // actually set the cursor position on the window thread
     mWindowThread->post([=]()
         {
-            // actually set the OS cursor position
+            mCursorPosition = position;
             SetCursorPos(screen_pos.mX, screen_pos.mY);
+            mHasPendingWarp.store(false, std::memory_order_release);
         });
 
     return true;
@@ -2076,13 +2198,23 @@ bool LLWindowWin32::setCursorPosition(const LLCoordWindow position)
 
 bool LLWindowWin32::getCursorPosition(LLCoordWindow *position)
 {
-    ASSERT_MAIN_THREAD();
+    // Reading is fine from any thread. Only the OS (window) thread writes
+    // the cache; a warp that hasn't been applied yet is served from the
+    // pending hint so callers don't read the stale pre-warp position.
     if (!position)
     {
         return false;
     }
 
-    *position = mCursorPosition;
+    if (mHasPendingWarp.load(std::memory_order_acquire))
+    {
+        const U64 packed = mPendingWarp.load(std::memory_order_relaxed);
+        *position = LLCoordWindow((S32)(U32)(packed >> 32), (S32)(U32)(packed & 0xFFFFFFFFu));
+    }
+    else
+    {
+        *position = mCursorPosition;
+    }
     return true;
 }
 
@@ -3007,6 +3139,8 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
         case WM_LBUTTONDBLCLK:
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_WIN32("mwp - WM_LBUTTONDBLCLK");
+            // Input state mutates HERE, on the OS thread.
+            window_imp->mCursorPosition = window_coord;
             window_imp->postMouseButtonEvent([=]()
                 {
                     //RN: ignore right button double clicks for now
@@ -3017,9 +3151,6 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                         return;
                     }
                     MASK mask = gKeyboard->currentMask(true);
-
-                    // generate move event to update mouse coordinates
-                    window_imp->mCursorPosition = window_coord;
                     window_imp->mCallbacks->handleDoubleClick(window_imp, window_imp->mCursorPosition.convert(), mask);
                 });
 
@@ -3029,6 +3160,8 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_WIN32("mwp - WM_LBUTTONUP");
             {
+                // Input state mutates HERE, on the OS thread.
+                window_imp->mCursorPosition = window_coord;
                 window_imp->postMouseButtonEvent([=]()
                     {
                         LL_RECORD_BLOCK_TIME(FTM_MOUSEHANDLER);
@@ -3041,8 +3174,6 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
 
 
                         MASK mask = gKeyboard->currentMask(true);
-                        // generate move event to update mouse coordinates
-                        window_imp->mCursorPosition = window_coord;
                         window_imp->mCallbacks->handleMouseUp(window_imp, window_imp->mCursorPosition.convert(), mask);
                     });
             }
@@ -3252,15 +3383,16 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
         case WM_MOUSEMOVE:
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_WIN32("mwp - WM_MOUSEMOVE");
-            // DO NOT use mouse event queue for move events to ensure cursor position is updated
-            // when button events are handled
+            // Input state mutates HERE, on the OS thread.
+            window_imp->mCursorPosition = window_coord;
+            // The modifier mask comes from app-side keyboard state, so
+            // it updates through the queue with the other app work.
             WINDOW_IMP_POST(
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_WIN32("mwp - WM_MOUSEMOVE lambda");
 
                     MASK mask = gKeyboard->currentMask(true);
                     window_imp->mMouseMask = mask;
-                    window_imp->mCursorPosition = window_coord;
                 });
             return 0;
         }

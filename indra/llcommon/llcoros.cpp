@@ -73,9 +73,9 @@ bool LLCoros::on_main_coro()
 }
 
 // static
-bool LLCoros::on_main_thread_main_coro()
+bool LLCoros::on_viewer_thread_main_coro()
 {
-    return on_main_coro() && on_main_thread();
+    return on_main_coro() && on_viewer_thread();
 }
 
 // static

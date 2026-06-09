@@ -51,8 +51,8 @@ using std::pair;
 using std::make_pair;
 using std::string;
 
-GLuint LLGLSLShader::sCurBoundShader = 0;
-LLGLSLShader* LLGLSLShader::sCurBoundShaderPtr = NULL;
+thread_local GLuint LLGLSLShader::sCurBoundShader = 0;
+thread_local LLGLSLShader* LLGLSLShader::sCurBoundShaderPtr = NULL;
 S32 LLGLSLShader::sIndexedTextureChannels = 0;
 U32 LLGLSLShader::sMaxGLTFMaterials = 0;
 U32 LLGLSLShader::sMaxGLTFNodes = 0;

@@ -126,7 +126,7 @@ void LLCommon::initClass()
         sAprInitialized = true;
     }
     LLTimer::initClass();
-    assert_main_thread();       // Make sure we record the main thread
+    assert_viewer_thread();       // Make sure we record the main thread
     if (!sMasterThreadRecorder)
     {
         sMasterThreadRecorder = new LLTrace::ThreadRecorder();

@@ -2194,6 +2194,17 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>RenderCompositorShowRefresh</key>
+    <map>
+      <key>Comment</key>
+      <string>Show the compositor refresh overlay (colored squares repainting at different sync-rate intervals, bottom-left)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
   <key>DebugShowRenderMatrices</key>
   <map>
     <key>Comment</key>
@@ -2546,14 +2557,25 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
-    <key>RenderVSyncEnable</key>
+    <key>CoroutinePoolsOnViewerThread</key>
     <map>
       <key>Comment</key>
-      <string>Update frames between display scans (FALSE = Update frames as fast as possible).</string>
+      <string>Run the coprocedure coroutine pools (AIS, Upload) on the viewer thread, alongside the inventory and UI state they touch. Turning this off runs them on the OS main thread instead - experimental and not yet safe.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>RenderVSyncMode</key>
+    <map>
+      <key>Comment</key>
+      <string>World pacing against the compositor's sync signal. 0 = off (world renders as fast as it can), 1 = every sync (refresh rate), 2 = every other sync (refresh/2), 3 = every 2nd sync (refresh/3), 4 = every 3rd sync (refresh/4). The compositor itself always presents synced.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
       <key>Value</key>
       <integer>1</integer>
     </map>

@@ -277,7 +277,10 @@
 
 #include "threadpool.h"
 #include "llperfstats.h"
+#include "workqueue.h"
 
+// Work that has to run on the OS main thread. Defined in llappviewer.cpp.
+extern LL::WorkQueue gOSMainWork;
 
 #if LL_WINDOWS
 #include "lldxhardware.h"
@@ -976,9 +979,10 @@ bool idle_startup()
         gLoginMenuBarView->setEnabled( true );
         show_debug_menus();
 
-        // Hide the splash screen
+        // Hide the splash screen. The splash window belongs to the OS
+        // main thread, so the hide has to happen over there.
         LL_DEBUGS("AppInit") << "Hide the splash screen and show window" << LL_ENDL;
-        LLSplashScreen::hide();
+        gOSMainWork.post([]{ LLSplashScreen::hide(); });
         // Push our window frontmost
         gViewerWindow->getWindow()->show();
 

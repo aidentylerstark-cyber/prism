@@ -38,6 +38,8 @@
 #include "llmutex.h"
 #include "workqueue.h"
 
+#include <atomic>
+
 // Hack for async host by name
 #define LL_WM_HOST_RESOLVED      (WM_APP + 1)
 // For requesting shutdown on uninstall,
@@ -73,6 +75,9 @@ public:
     void makeContextCurrent(void* context) override;
     void destroySharedContext(void* context) override;
     void toggleVSync(bool enable_vsync) override;
+    void setSwapInterval(S32 interval) override;
+    S32 getRefreshRate() override;
+    bool isDynamicRefreshRate() override;
     bool setCursorPosition(LLCoordWindow position) override;
     bool getCursorPosition(LLCoordWindow *position) override;
     bool getCursorDelta(LLCoordCommon* delta) override;
@@ -213,9 +218,18 @@ protected:
     WPARAM      mLastSizeWParam;
     F32         mOverrideAspectRatio;
     F32         mNativeAspectRatio;
+    bool        mIsDynamicRefresh = false;  // display runs dynamic refresh; see getRefreshRate()
 
     HCURSOR     mCursor[ UI_CURSOR_COUNT ];  // Array of all mouse cursors
-    LLCoordWindow mCursorPosition;  // mouse cursor position, should only be mutated on main thread
+    LLCoordWindow mCursorPosition;  // mouse cursor position; written only on the OS (window) thread, readable from anywhere
+
+    // A warp requested via setCursorPosition is applied asynchronously on
+    // the window thread. Until then getCursorPosition prefers the
+    // requested position so a same-frame read right after a warp isn't
+    // stale. The cursor cache itself is still written only on the window
+    // thread; this is just a read-side hint, packed (x<<32 | y).
+    std::atomic<bool> mHasPendingWarp{false};
+    std::atomic<U64>  mPendingWarp{0};
     bool        mAbsoluteCursorPosition; // true if last position was received in absolute coordinates.
     LLMutex mRawMouseMutex;
     RAWINPUTDEVICE mRawMouse;

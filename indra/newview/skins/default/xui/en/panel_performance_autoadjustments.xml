@@ -228,18 +228,48 @@
    top_pad="3"
    left="20"
    width="540"/>
-  <check_box
-   control_name="RenderVSyncEnable"
-   height="16"
-   left="17"
-   initial_value="true"
-   label="Enable VSync"
-   label_text.text_color="White"
+  <text
+   follows="left|top"
+   font="SansSerifSmall"
+   text_color="White"
+   height="18"
    layout="topleft"
+   left="20"
    top_pad="12"
-   name="vsync"
-   tool_tip="Enable Vertical synchronization to reduce screen tearing and stuttering."
-   width="315" />
+   name="vsync_label"
+   width="180">
+    VSync:
+  </text>
+  <combo_box
+   control_name="RenderVSyncMode"
+   height="19"
+   left="17"
+   layout="topleft"
+   top_pad="3"
+   name="vsync_mode"
+   tool_tip="Paces the world against the display. Off renders as fast as possible; the other modes run at the refresh rate or a fraction of it."
+   width="180">
+      <combo_box.item
+        label="Off"
+        name="VSyncOff"
+        value="0"/>
+      <combo_box.item
+        label="On"
+        name="VSyncOn"
+        value="1"/>
+      <combo_box.item
+        label="Every 2nd frame"
+        name="VSyncHalf"
+        value="2"/>
+      <combo_box.item
+        label="Every 3rd frame"
+        name="VSyncThird"
+        value="3"/>
+      <combo_box.item
+        label="Every 4th frame"
+        name="VSyncQuarter"
+        value="4"/>
+  </combo_box>
   <text
    follows="left|top"
    font="SansSerifSmall"

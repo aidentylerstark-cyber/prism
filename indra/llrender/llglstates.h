@@ -46,9 +46,10 @@ public:
     GLenum mPrevDepthFunc;
     GLboolean mPrevWriteEnabled;
 private:
-    static GLboolean sDepthEnabled; // defaults to GL_FALSE
-    static GLenum sDepthFunc; // defaults to GL_LESS
-    static GLboolean sWriteEnabled; // defaults to GL_TRUE
+    // Per-context GL state mirrors, so thread_local.
+    static thread_local GLboolean sDepthEnabled; // defaults to GL_FALSE
+    static thread_local GLenum sDepthFunc; // defaults to GL_LESS
+    static thread_local GLboolean sWriteEnabled; // defaults to GL_TRUE
 };
 
 //----------------------------------------------------------------------------

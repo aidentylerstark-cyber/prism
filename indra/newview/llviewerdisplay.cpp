@@ -168,6 +168,12 @@ void display_startup()
 
     LLGLState::checkStates();
 
+    // Route startup-screen rendering through the swap chain so we never name
+    // FBO 0 here, AND so dynamic-texture updates below have a parent on the
+    // RT stack when they flush.
+    LLSwapChain& startup_sc = LLAppViewer::instance()->getSwapChain();
+    startup_sc.acquireNextImage().bindTarget();
+
     if (frame_count++ > 1) // make sure we have rendered a frame first
     {
         LLViewerDynamicTexture::updateAllInstances();
@@ -193,8 +199,11 @@ void display_startup()
 
     LLGLState::checkStates();
 
-    if (gViewerWindow && gViewerWindow->getWindow())
-    gViewerWindow->getWindow()->swapBuffers();
+    if (LLRenderTarget::getCurrentBoundTarget() == &startup_sc.getCurrentImage())
+    {
+        startup_sc.getCurrentImage().flush();
+    }
+    startup_sc.present();
 
     glClear(GL_DEPTH_BUFFER_BIT);
 }
@@ -417,13 +426,23 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_DISPLAY); // render time capture - This is the main stat for overall rendering.
 
-    if (gWindowResized)
+    if (gWindowResized && !for_snapshot)
     { //skip render on frames where window has been resized
         LL_DEBUGS("Window") << "Resizing window" << LL_ENDL;
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Resize Window");
         gGL.flush();
-        glClear(GL_COLOR_BUFFER_BIT);
-        gViewerWindow->getWindow()->swapBuffers();
+        // Route the resize-skip black clear through the swap chain so we
+        // don't reach for FBO 0 here either. Only run when no other RT is on
+        // the stack — snapshots set their own bottom-of-stack target.
+        LLSwapChain& sc = LLAppViewer::instance()->getSwapChain();
+        if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
+        {
+            LLRenderTarget& img = sc.acquireNextImage();
+            img.bindTarget();
+            img.clear(GL_COLOR_BUFFER_BIT);
+            img.flush();
+            sc.present();
+        }
         LLPipeline::refreshCachedSettings();
         gPipeline.resizeScreenTexture();
         gResizeScreenTexture = false;
@@ -694,6 +713,19 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     //
     // Actually push all of our triangles to the screen.
     //
+
+    // Bind the OS window's presentation image as the bottom of the render
+    // target stack for this frame. Everything downstream — dynamic-texture
+    // updates, pipeline G-buffers, lighting, post-proc ping-pongs,
+    // renderFinalize's fullscreen triangle, and the UI — sits on top of this
+    // in the LLRenderTarget stack and pops back to it on flush. swap()
+    // flushes the image and calls present(). Snapshot renders go to their
+    // own off-screen target, so we skip the bind in that case.
+    LLSwapChain& swap_chain = LLAppViewer::instance()->getSwapChain();
+    if (!for_snapshot && LLRenderTarget::getCurrentBoundTarget() == nullptr)
+    {
+        swap_chain.acquireNextImage().bindTarget();
+    }
 
     // do render-to-texture stuff here
     if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_DYNAMIC_TEXTURES))
@@ -1557,9 +1589,19 @@ void swap()
     LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SWAP ); // render time capture - Swap buffer time - can signify excessive data transfer to/from GPU
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Swap");
     LL_PROFILE_GPU_ZONE("swap");
+
+    // Flush the swap chain's current image off the RT stack before presenting.
+    // The OS framebuffer stays bound (that's what present needs); this just
+    // pops the LLRenderTarget bookkeeping.
+    LLSwapChain& swap_chain = LLAppViewer::instance()->getSwapChain();
+    if (LLRenderTarget::getCurrentBoundTarget() == &swap_chain.getCurrentImage())
+    {
+        swap_chain.getCurrentImage().flush();
+    }
+
     if (gDisplaySwapBuffers)
     {
-        gViewerWindow->getWindow()->swapBuffers();
+        swap_chain.present();
     }
     gDisplaySwapBuffers = true;
 }

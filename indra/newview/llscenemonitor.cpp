@@ -311,16 +311,17 @@ void LLSceneMonitor::capture()
 
         LLRenderTarget& cur_target = getCaptureTarget();
 
-        U32 old_FBO = LLRenderTarget::sCurFBO;
-
         gGL.getTexUnit(0)->bind(&cur_target);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0); //point to the main frame buffer.
+
+        // Read from the most recently presented swap chain image — i.e. the
+        // frame currently on screen. The current image is mid-render at this
+        // point; the previous one is what the user sees.
+        LLRenderTarget& src = LLAppViewer::instance()->getSwapChain().getPreviousImage();
+        src.bindForRead();
 
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, cur_target.getWidth(), cur_target.getHeight()); //copy the content
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, old_FBO);
+        src.unbindRead();
 
         mDiffState = NEED_DIFF;
     }

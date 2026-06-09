@@ -934,7 +934,11 @@ void LLViewerAssetUpload::AssetInventoryUploadCoproc(LLCoreHttpUtil::HttpCorouti
 
             LLSD args;
             args["AMOUNT"] = llformat("%d", uploadPrice);
-            LLNotificationsUtil::add("UploadPayment", args);
+            // Notification add hits UI work that must run on the main coro.
+            LLAppViewer::instance()->postToMainCoro([args]()
+            {
+                LLNotificationsUtil::add("UploadPayment", args);
+            });
         }
     }
     else
@@ -1032,7 +1036,11 @@ void LLViewerAssetUpload::HandleUploadError(LLCore::HttpStatus status, LLSD &res
         args["ERROR"] = reason;
     }
 
-    LLNotificationsUtil::add(label, args);
+    // Notification add hits UI work that must run on the main coro.
+    LLAppViewer::instance()->postToMainCoro([label, args]()
+    {
+        LLNotificationsUtil::add(label, args);
+    });
 
     if (uploadInfo->failedUpload(result, reason))
     {

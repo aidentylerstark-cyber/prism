@@ -49,6 +49,7 @@
 #include "llsys.h"          // for LLOSInfo
 #include "lltimer.h"
 #include "llappcorehttp.h"
+#include "llswapchain.h"
 #include "threadpool_fwd.h"
 
 #include <boost/signals2.hpp>
@@ -148,6 +149,12 @@ public:
 
     std::string getSecondLifeTitle() const; // The Second Life title.
     std::string getWindowTitle() const; // The window display name.
+
+    // The OS window's presentation swap chain. Owns the LLRenderTarget(s) that
+    // back FBO 0 (or the equivalent on future Vk/XR backends). Viewer code
+    // acquires an image from this chain per frame instead of touching FBO 0
+    // directly.
+    LLSwapChain& getSwapChain() { return mSwapChain; }
 
     void forceDisconnect(const std::string& msg); // Force disconnection, with a message to the user.
 
@@ -373,6 +380,7 @@ private:
     S32 mNumSessions;
 
     std::string mSerialNumber;
+    LLSwapChain mSwapChain;
     bool mPurgeCache;
     bool mPurgeCacheOnExit;
     bool mPurgeUserDataOnExit;

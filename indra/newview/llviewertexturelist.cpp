@@ -1175,6 +1175,19 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
         LLGLDisable blend(GL_BLEND);
         gGL.setColorMask(true, true);
 
+        // Give mDownResMap a parent on the RT stack so its flush below pops
+        // back to the swap chain image instead of falling off the bottom.
+        // This pump can be called from idle() (no parent bound) or from
+        // display() (swap chain image already bound) — only wrap when the
+        // stack is empty.
+        LLSwapChain& dr_sc = LLAppViewer::instance()->getSwapChain();
+        bool dr_sc_bound = false;
+        if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
+        {
+            dr_sc.acquireNextImage().bindTarget();
+            dr_sc_bound = true;
+        }
+
         // just in case we downres textures, bind downresmap and copy program
         gPipeline.mDownResMap.bindTarget();
         gCopyProgram.bind();
@@ -1211,6 +1224,12 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
 
         gCopyProgram.unbind();
         gPipeline.mDownResMap.flush();
+
+        if (dr_sc_bound &&
+            LLRenderTarget::getCurrentBoundTarget() == &dr_sc.getCurrentImage())
+        {
+            dr_sc.getCurrentImage().flush();
+        }
     }
 
     return create_timer.getElapsedTimeF32();

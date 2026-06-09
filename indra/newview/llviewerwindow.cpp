@@ -2596,6 +2596,10 @@ void LLViewerWindow::reshape(S32 width, S32 height)
         mWindowRectRaw.mRight = mWindowRectRaw.mLeft + width;
         mWindowRectRaw.mTop = mWindowRectRaw.mBottom + height;
 
+        // Keep the presentation swap chain in sync with the window size so
+        // its image's viewport tracks the OS window.
+        LLAppViewer::instance()->getSwapChain().resize((U32)width, (U32)height);
+
         //glViewport(0, 0, width, height );
 
         LLViewerCamera * camera = LLViewerCamera::getInstance(); // simpleton, might not exist

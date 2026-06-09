@@ -1497,9 +1497,36 @@ bool LLAppViewer::doFrame()
                     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
                     pingMainloopTimeout("Main:Snapshot");
+
+                    // These updaters allocate and bind their own render
+                    // targets while no parent target is on the stack. Bind
+                    // the swap chain image around the calls so they pop back
+                    // to it instead of tripping the missing-parent assert in
+                    // LLRenderTarget::flush(). Only wrap when the stack is
+                    // empty — these updaters can recurse into display() (e.g.
+                    // snapshot live preview → rawSnapshot → display) which
+                    // may bring its own parent.
+                    bool sc_bound = false;
+                    if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
+                    {
+                        mSwapChain.acquireNextImage().bindTarget();
+                        sc_bound = true;
+                    }
+
                     gPipeline.mReflectionMapManager.update();
                     LLFloaterSnapshot::update(); // take snapshots
                     LLFloaterSimpleSnapshot::update();
+
+                    if (sc_bound &&
+                        LLRenderTarget::getCurrentBoundTarget() == &mSwapChain.getCurrentImage())
+                    {
+                        // Only flush if our bind is still on top. Updaters
+                        // can internally call swap() (e.g. rawSnapshot's
+                        // non-deferred path), which will already have flushed
+                        // the image.
+                        mSwapChain.getCurrentImage().flush();
+                    }
+
                     gGLActive = false;
                 }
 
@@ -2033,6 +2060,10 @@ bool LLAppViewer::cleanup()
     LLLFSThread::sLocal->shutdown();
 
     LL_INFOS() << "Shutting down OpenGL" << LL_ENDL;
+
+    // Drop the swap chain before window teardown — its images are bound to
+    // the OS window and must not outlive it.
+    mSwapChain.release();
 
     // Shut down OpenGL
     if (gViewerWindow)
@@ -3368,6 +3399,13 @@ bool LLAppViewer::initWindow()
 
     stop_glerror();
     gViewerWindow->initGLDefaults();
+
+    // Stand up the presentation swap chain now that GL is up. From here on the
+    // viewer acquires an image from this chain each frame instead of touching
+    // FBO 0 directly.
+    mSwapChain.attachToWindow(gViewerWindow->getWindow(),
+                              gViewerWindow->getWindowWidthRaw(),
+                              gViewerWindow->getWindowHeightRaw());
 
     gSavedSettings.setBOOL("RenderInitError", false);
     gSavedSettings.saveToFile( gSavedSettings.getString("ClientSettingsFile"), true );

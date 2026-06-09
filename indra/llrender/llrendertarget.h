@@ -68,6 +68,15 @@ public:
     static U32 sCurResX;
     static U32 sCurResY;
 
+    // When true, flush() requires a parent on the RT stack — i.e. the viewer
+    // has reached steady-state rendering with the swap chain attached. When
+    // false (early init before swap chain attach, or after shutdown release),
+    // flush() falls back to the OS default framebuffer so pre-attach code
+    // paths (feature-manager GPU benchmark, etc.) keep working. Toggled by
+    // LLSwapChain attach/release.
+    // - Geenz 2026-06-08
+    static bool sFlushRequiresParent;
+
 
     LLRenderTarget();
     ~LLRenderTarget();
@@ -81,6 +90,25 @@ public:
     // depth - if true, allocate a depth buffer
     // usage - deprecated, should always be TT_TEXTURE
     bool allocate(U32 resx, U32 resy, U32 color_fmt, bool depth = false, LLTexUnit::eTextureType usage = LLTexUnit::TT_TEXTURE, LLTexUnit::eTextureMipGeneration generateMipMaps = LLTexUnit::TMG_NONE);
+
+    // Mark this RT as an LLSwapChain image. The flag changes bindTarget's
+    // viewport restore behavior: when an intermediate RT flushes back to a
+    // swap-chain image, glViewport is restored to gGLViewport (the world
+    // view rect) instead of (0,0,mResX,mResY). HUD/UI rendering and
+    // renderFinalize's fullscreen triangle expect that.
+    void markAsSwapChainImage(bool yes = true) { mIsSwapChainImage = yes; }
+    bool isSwapChainImage() const { return mIsSwapChainImage; }
+
+    // Bind this RT's FBO as GL_READ_FRAMEBUFFER (preserves the current draw
+    // FBO). Pair with unbindRead() to restore the read FB to the current
+    // draw target. Used by readback consumers (scene monitor) to copy from
+    // a swap chain image without ever naming FBO 0 themselves.
+    void bindForRead();
+
+    // Restore GL_READ_FRAMEBUFFER to the current draw FBO (sCurFBO). Pairs
+    // with bindForRead(). Doesn't read instance state; the symmetric API
+    // just keeps the call sites tidy.
+    void unbindRead();
 
     //resize existing attachments to use new resolution and color format
     // CAUTION: if the GL runs out of memory attempting to resize, this render target will be undefined
@@ -149,6 +177,11 @@ public:
 
     U32 getDepth(void) const { return mDepth; }
 
+    // Underlying GL framebuffer object name. Exposed for LLSwapChain's
+    // present-time blit; viewer code should bind through bindTarget /
+    // bindForRead instead of touching this directly.
+    U32 getFBO() const { return mFBO; }
+
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
 
     //flush rendering operations
@@ -188,6 +221,18 @@ protected:
     U32 mMipLevels;
 
     LLTexUnit::eTextureType mUsage;
+
+    // True when this RT is one of LLSwapChain's images. Affects only
+    // viewport restore semantics in bindTarget (see markAsSwapChainImage).
+    //
+    // Future cleanup: replace this flag with a per-RT viewport member
+    // (mViewportX/Y/W/H) and have LLSwapChain push gGLViewport updates
+    // into its images. Generalizes sub-rect viewports for any RT and maps
+    // naturally to Vk/XR state. Held off today because gGLViewport changes
+    // more often than window resize (per-frame setup3DViewport, UI scale,
+    // sidebar) — syncing it everywhere is intrusive. Worth taking on as
+    // part of the broader render-state cleanup for Vulkan port prep.
+    bool mIsSwapChainImage = false;
 };
 
 #endif

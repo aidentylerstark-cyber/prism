@@ -52,6 +52,7 @@ void check_framebuffer_status()
 
 bool LLRenderTarget::sUseFBO = false;
 U32 LLRenderTarget::sCurFBO = 0;
+bool LLRenderTarget::sFlushRequiresParent = false;
 
 
 extern S32 gGLViewport[4];
@@ -352,6 +353,8 @@ void LLRenderTarget::release()
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
     llassert(!isBoundInStack());
 
+    mIsSwapChainImage = false;
+
     if (mDepth)
     {
         LLImageGL::deleteTextures(1, &mDepth);
@@ -415,8 +418,8 @@ void LLRenderTarget::release()
 void LLRenderTarget::bindTarget()
 {
     LL_PROFILE_GPU_ZONE("bindTarget");
-    llassert(mFBO);
     llassert(!isBoundInStack());
+    llassert(mFBO);
 
     glBindFramebuffer(GL_FRAMEBUFFER, mFBO);
     sCurFBO = mFBO;
@@ -439,9 +442,24 @@ void LLRenderTarget::bindTarget()
     }
     check_framebuffer_status();
 
-    glViewport(0, 0, mResX, mResY);
-    sCurResX = mResX;
-    sCurResY = mResY;
+    if (mIsSwapChainImage)
+    {
+        // Bottom-of-stack swap chain image: restore the world-view viewport
+        // (gGLViewport) so HUD/UI and renderFinalize's fullscreen triangle
+        // render into the same sub-rect they did when we drew straight to
+        // FBO 0. The off-screen image is window-sized; the viewport is the
+        // world-view rect inside it.
+        // - Geenz 2026-06-08
+        glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+        sCurResX = gGLViewport[2];
+        sCurResY = gGLViewport[3];
+    }
+    else
+    {
+        glViewport(0, 0, mResX, mResY);
+        sCurResX = mResX;
+        sCurResY = mResY;
+    }
 
     mPreviousRT = sBoundTarget;
     sBoundTarget = this;
@@ -499,9 +517,9 @@ void LLRenderTarget::flush()
 {
     LL_PROFILE_GPU_ZONE("rt flush");
     gGL.flush();
+    llassert(sBoundTarget == this);
     llassert(mFBO);
     llassert(sCurFBO == mFBO);
-    llassert(sBoundTarget == this);
 
     if (mGenerateMipMaps == LLTexUnit::TMG_AUTO)
     {
@@ -516,18 +534,48 @@ void LLRenderTarget::flush()
         // the previous frame back on to play nice with the GL state machine
         sBoundTarget = mPreviousRT->mPreviousRT;
         mPreviousRT->bindTarget();
+        return;
     }
-    else
+
+    if (mIsSwapChainImage)
     {
+        // Bottom of the stack for a render batch. Just pop the bookkeeping
+        // and leave the FBO bound — LLSwapChain::present() will rebind FBO 0
+        // for the blit, and the next acquireNextImage() will set up the next
+        // image's bind.
         sBoundTarget = nullptr;
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        sCurFBO = 0;
-        glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
-        sCurResX = gGLViewport[2];
-        sCurResY = gGLViewport[3];
-        glReadBuffer(GL_BACK);
-        glDrawBuffer(GL_BACK);
+        return;
     }
+
+    // No parent on the stack and not a swap chain image. While the swap chain
+    // is attached (steady-state rendering) this is a missed bind site —
+    // assert so the call site can be wrapped. Before the chain attaches or
+    // after release (feature-manager GPU benchmark, late shutdown cleanup)
+    // fall back to the OS default framebuffer the way the old code did.
+    // - Geenz 2026-06-08
+    llassert(!sFlushRequiresParent);
+
+    sBoundTarget = nullptr;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    sCurFBO = 0;
+    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    sCurResX = gGLViewport[2];
+    sCurResY = gGLViewport[3];
+    glReadBuffer(GL_BACK);
+    glDrawBuffer(GL_BACK);
+}
+
+void LLRenderTarget::bindForRead()
+{
+    llassert(mFBO);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, mFBO);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+}
+
+void LLRenderTarget::unbindRead()
+{
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sCurFBO);
+    glReadBuffer(sCurFBO ? GL_COLOR_ATTACHMENT0 : GL_BACK);
 }
 
 bool LLRenderTarget::isComplete() const

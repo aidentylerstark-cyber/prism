@@ -30,15 +30,19 @@
 #include "llresourcelease.h"
 #include "llgltypes.h"
 
+#include <atomic>
 #include <memory>
 #include <shared_mutex>
+#include <utility>
 
 // Base class for GPU resources that need cross-thread synchronization.
 //
 // Provides two kinds of RAII lease: shared (many readers) and unique (one
-// writer). Subclasses can override the acquire/release hooks to place GL
-// fences at the lease boundary; the defaults do nothing, so resources that
-// don't need cross-context fences pay nothing.
+// writer) - a plain reader/writer lock, nothing more. Leasing is opt-in
+// (setLeaseEnabled): only resources actually shared across threads take the
+// lock; everything else gets an empty lease and pays nothing on the bind hot
+// path. Cross-context GL fences are placed/waited explicitly by callers (see
+// LLImageGL), not by the lease.
 //
 // Leases follow std::shared_mutex rules: non-recursive, so don't take a
 // second lease on the same resource while you already hold one.
@@ -53,25 +57,35 @@ public:
 
     // Movable so containers of these can reallocate. Only move when no
     // leases are live; a moved-from resource has a null mutex and can't
-    // be leased again.
-    LLGPUResource(LLGPUResource&& other) noexcept = default;
+    // be leased again. Spelled out because std::atomic isn't movable.
+    LLGPUResource(LLGPUResource&& other) noexcept
+        : mLeaseMutex(std::move(other.mLeaseMutex)),
+          mLeaseEnabled(other.mLeaseEnabled.load(std::memory_order_relaxed)) {}
     LLGPUResource& operator=(LLGPUResource&&)     = delete;
 
-    LLSharedLease getSharedLease() const { return LLSharedLease(const_cast<LLGPUResource*>(this)); }
-    LLUniqueLease getUniqueLease()       { return LLUniqueLease(this); }
+    // Opt-in: a resource that hasn't enabled leasing returns an empty lease,
+    // so the lock is skipped entirely.
+    LLSharedLease getSharedLease() const
+    {
+        return LLSharedLease(mLeaseEnabled.load(std::memory_order_acquire)
+                             ? const_cast<LLGPUResource*>(this) : nullptr);
+    }
+    LLUniqueLease getUniqueLease()
+    {
+        return LLUniqueLease(mLeaseEnabled.load(std::memory_order_acquire) ? this : nullptr);
+    }
 
 protected:
-    // Lease lifecycle hooks, called with the lock held. Override the ones
-    // you care about; the defaults do nothing.
-    virtual void onSharedAcquire() {}
-    virtual void onSharedRelease() {}
-    virtual void onUniqueAcquire() {}
-    virtual void onUniqueRelease() {}
+    // Enable leasing for this resource. Off by default - flip it on once the
+    // resource is actually handed across threads (e.g. an off-thread texture
+    // upload), before the first cross-thread lease.
+    void setLeaseEnabled(bool b) { mLeaseEnabled.store(b, std::memory_order_release); }
 
 private:
     friend class LLSharedLease;
     friend class LLUniqueLease;
     mutable std::unique_ptr<std::shared_mutex> mLeaseMutex;
+    std::atomic<bool> mLeaseEnabled{false};
 };
 
 // Guarded GL texture name - the guard holds a shared lease for as long as

@@ -76,6 +76,7 @@ else()
   find_library(APPKIT_LIBRARY AppKit)
   find_library(COREAUDIO_LIBRARY CoreAudio)
   find_library(COREGRAPHICS_LIBRARY CoreGraphics)
+  find_library(COREVIDEO_LIBRARY CoreVideo)
   find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox)
   find_library(UNIFORMTYPEIDENTIFIERS_LIBRARY UniformTypeIdentifiers)
 
@@ -88,6 +89,7 @@ else()
           ${COREAUDIO_LIBRARY}
           ${AUDIOTOOLBOX_LIBRARY}
           ${COREGRAPHICS_LIBRARY}
+          ${COREVIDEO_LIBRARY}
           ${UNIFORMTYPEIDENTIFIERS_LIBRARY}
           )
 endif()

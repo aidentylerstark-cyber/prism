@@ -262,7 +262,7 @@ protected:
 //
 // The composite image that a LLTexLayerSet writes to.  Each LLTexLayerSet has one.
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-class LLTexLayerSetBuffer : public virtual LLRefCount
+class LLTexLayerSetBuffer : public virtual LLThreadSafeRefCount
 {
     LOG_CLASS(LLTexLayerSetBuffer);
 

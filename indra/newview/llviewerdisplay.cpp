@@ -214,7 +214,7 @@ void display_startup()
     }
     // Just set the flag; the actual publish happens at the end of
     // renderViewerFrame.
-    LLAppViewer::instance()->setBackBufferRendered("startup");
+    LLAppViewer::instance()->setBackBufferRendered();
 
     glClear(GL_DEPTH_BUFFER_BIT);
 }
@@ -1617,7 +1617,7 @@ void swap()
     }
     // Just set the flag here - we only publish once per frame, at the
     // end of renderViewerFrame. Publishing twice gets us stale frames.
-    LLAppViewer::instance()->setBackBufferRendered("world");
+    LLAppViewer::instance()->setBackBufferRendered();
 }
 
 void renderCoordinateAxes()

@@ -31,11 +31,13 @@
 #include "lltestsquarecompositable.h"
 #include "lltimer.h"
 #include "llrendertarget.h"
+#include "llimagegl.h"
 #include "llgl.h"
 #include "llglslshader.h"
 #include "llwindow.h"
 
 #include <algorithm>
+#include <chrono>
 
 LLCompositor::LLCompositor() = default;
 
@@ -144,6 +146,13 @@ void LLCompositor::presentFrame()
 {
     LL_PROFILE_ZONE_SCOPED;
 
+    // Once shutdown is requested we stop presenting so producers waiting
+    // on a present unblock and the viewer thread can be joined.
+    if (mShutdownRequested.load(std::memory_order_relaxed))
+    {
+        return;
+    }
+
     // The RT stack should be empty when we get here.
     llassert(LLRenderTarget::getCurrentBoundTarget() == nullptr);
 
@@ -180,10 +189,10 @@ void LLCompositor::presentFrame()
 
     const F64 present_start = LLTimer::getTotalSeconds();
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    LLRenderTarget::sCurFBO = 0;
-    glViewport(0, 0, dst_w, dst_h);
-    glDrawBuffer(GL_BACK);
+    // Acquire the present surface through the swap-chain seam (GL: FBO 0, full
+    // window) and composite the layers straight into it.
+    mSwapChain.acquireNextImage();
+    mSwapChain.bindForRender();
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);
@@ -218,15 +227,29 @@ void LLCompositor::presentFrame()
         const GLint w = (GLint)front.getWidth();
         const GLint h = (GLint)front.getHeight();
 
-        // Textures are shared between contexts, FBOs aren't. The guard
-        // holds the RT's shared lease across the draw and fences.
-        LLScopedTexName src_tex_guard = front.getTexture(0);
-        const U32 src_tex = src_tex_guard.get();
+        // The cross-context primitive is the color texture (LLImageGL), not the
+        // FBO-centric RT. Sample it directly: the guard holds its shared lease
+        // across the draw and its fence orders the GPU. Single-context layers
+        // (no attachment image) fall back to the raw RT name (no lease needed).
+        LLImageGL* sync = front.getColorAttachmentImage();
+        LLScopedTexName src_tex_guard;
+        U32 src_tex;
+        if (sync)
+        {
+            src_tex_guard = sync->getTexName();
+            src_tex = src_tex_guard.get();
+        }
+        else
+        {
+            src_tex = front.getTexture(0);
+        }
         llassert(src_tex != 0);
 
         // Wait on the producer's fence so we only sample finished pixels.
-        // No-op if the RT didn't opt in to cross-context sync.
-        front.waitFrameCompleteFence();
+        if (sync)
+        {
+            sync->waitFrameCompleteFence();
+        }
 
         // Layer rect in NDC; GL origin bottom-left matches the
         // compositeOffset convention.
@@ -244,7 +267,10 @@ void LLCompositor::presentFrame()
 
         // Reverse fence: the producer waits on this before writing into
         // the buffer again.
-        front.placeReadCompleteFence();
+        if (sync)
+        {
+            sync->placeReadCompleteFence();
+        }
     }
 
     if (shader_ready)
@@ -252,8 +278,10 @@ void LLCompositor::presentFrame()
         mBlitShader->unbind();
     }
 
-    // The layers were drawn straight into FBO 0; just swap.
-    mSwapChain.presentDirect();
+    // Layers composited into the present surface; flush any batched GL and
+    // present (the old img.flush() path flushed gGL before swapBuffers).
+    gGL.flush();
+    mSwapChain.present();
 
     const F64 present_end = LLTimer::getTotalSeconds();
     mLastPresentMs.store(
@@ -275,7 +303,46 @@ void LLCompositor::presentFrame()
         mPresentWindowStart = present_end;
     }
 
-    // Let subscribers pace themselves to our clock.
-    ++mFrameIndex;
-    mOnSync(mFrameIndex);
+    // Publish the present so producers parked in waitForPresent can pace
+    // themselves to the vblank clock. LIVENESS INVARIANT: this must bump on
+    // EVERY present - including when we re-present an unchanged frame
+    // (tryAcquireNewFront returned false) - because the viewer thread makes
+    // progress only when this index advances. Never gate present() on having
+    // new output, or the vsync gate deadlocks.
+    {
+        std::lock_guard<std::mutex> lk(mSyncMutex);
+        ++mPresentIndex;
+    }
+    mSyncCV.notify_all();
+}
+
+U64 LLCompositor::waitForPresent(U64 target, const std::function<bool()>& should_stop)
+{
+    std::unique_lock<std::mutex> lk(mSyncMutex);
+    auto ready = [&]{
+        return mSyncInterrupted
+            || (should_stop && should_stop())
+            || mPresentIndex >= target;
+    };
+    // wait_for (not wait) so an external should_stop set without a notify is
+    // still picked up promptly - the present notify handles the common case.
+    while (!ready())
+    {
+        mSyncCV.wait_for(lk, std::chrono::milliseconds(100));
+    }
+    return mPresentIndex; // < target means interrupted; the caller should stop
+}
+
+void LLCompositor::interruptSync()
+{
+    {
+        std::lock_guard<std::mutex> lk(mSyncMutex);
+        mSyncInterrupted = true;
+    }
+    mSyncCV.notify_all();
+}
+
+void LLCompositor::wakeSyncWaiters()
+{
+    mSyncCV.notify_all();
 }

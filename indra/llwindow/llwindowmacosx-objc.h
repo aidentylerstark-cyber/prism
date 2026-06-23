@@ -31,6 +31,7 @@
 #include <map>
 #include <vector>
 #include <deque>
+#include <functional>
 
 //fir CGSize
 #include <CoreGraphics/CGGeometry.h>
@@ -107,8 +108,14 @@ NSWindowRef createNSWindow(int x, int y, int width, int height);
 
 #include <OpenGL/OpenGL.h>
 
+// Run func() inside an @autoreleasepool. For threads with no Cocoa run
+// loop (the viewer thread) so autoreleased ObjC objects don't leak.
+void ll_macos_run_in_autorelease_pool(const std::function<void()>& func);
+
 GLViewRef createOpenGLView(NSWindowRef window, unsigned int samples, bool vsync);
-void glSwapBuffers(void* context);
+unsigned int getWindowDisplayID(NSWindowRef window);
+double getWindowRefreshRate(NSWindowRef window);
+bool isWindowDynamicRefresh(NSWindowRef window);
 CGLContextObj getCGLContextObj(GLViewRef view);
 unsigned long getVramSize(GLViewRef view);
 float getDeviceUnitSize(GLViewRef view);

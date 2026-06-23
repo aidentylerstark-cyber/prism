@@ -221,6 +221,12 @@ public:
     // it between a base and boost rate). Computed as a side effect of
     // getRefreshRate() where supported.
     virtual bool isDynamicRefreshRate() { return false; }
+
+    // Run any AppKit/OS-main-only work the viewer thread deferred (e.g.
+    // cursor changes on macOS). Called on the OS main thread from the
+    // frame loop. Default no-op: platforms with their own window thread
+    // (Windows) don't use this.
+    virtual void drainOSMainQueue() {}
 protected:
     LLWindow(LLWindowCallbacks* callbacks, bool fullscreen, U32 flags);
     virtual ~LLWindow();

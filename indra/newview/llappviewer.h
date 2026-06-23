@@ -109,9 +109,9 @@ public:
     //
     // Main application logic
     //
-    virtual bool init();            // Override to do application initialization
-    virtual bool cleanup();         // Override to do application cleanup
-    virtual bool frame(); // Override for application body logic
+    virtual bool init() override;            // Override to do application initialization
+    virtual bool cleanup() override;         // Override to do application cleanup
+    virtual bool frame() override; // Override for application body logic
 
     // Application control
     void flushLFSIO(); // waits for lfs transfers to complete
@@ -172,7 +172,6 @@ public:
     // applies it on its own context), and everyone else adapts to the
     // resulting sync cadence.
     void setVSyncMode(U32 mode);
-    LLRenderTarget& getScratchParent() { return mScratchParent; }
 
     // Triple-buffer mailbox between the viewer thread and the compositor.
     // Each buffer lives in exactly one slot at a time:
@@ -198,12 +197,10 @@ public:
     void markFrameRendered();
 
     // Render paths call this once they've actually drawn into the back
-    // buffer; renderViewerFrame only publishes when set. The tag tells us
-    // which path drew, for diagnostics. Viewer thread only.
-    void setBackBufferRendered(const char* who)
+    // buffer; renderViewerFrame only publishes when set. Viewer thread only.
+    void setBackBufferRendered()
     {
         mBackBufferRendered = true;
-        mBackBufferRenderedBy = who;
     }
 
     // Runs display() plus the post-display updaters (reflection probes,
@@ -386,7 +383,7 @@ protected:
 
     virtual bool meetsRequirementsForMaximizedStart(); // Used on first login to decide to launch maximized
 
-    virtual void sendOutOfDiskSpaceNotification();
+    virtual void sendOutOfDiskSpaceNotification() override;
 
 protected:
 
@@ -465,17 +462,14 @@ private:
     LLRenderTarget        mRTs[3];
     U32                   mBackIdx{0};             // producer-owned (viewer thread)
     bool                  mBackBufferRendered{false}; // viewer-thread-only render gate
-    const char*           mBackBufferRenderedBy{"none"}; // which path set the gate
     std::atomic<S32>      mLatestIdx{-1};          // mailbox slot; -1 = empty
     std::atomic<S32>      mFreeIdx{1};             // recycle slot; -1 = empty
     S32                   mDisplayIdx{2};          // compositor-owned
     LLRenderTarget        mScratchParent;          // wrap parent for cubeSnapshot raw clear
 
-    // Compositor sync ticks for vsync pacing (RenderVSyncMode). The
-    // sync handler pushes from OS main, the viewer thread pops; tryPush
-    // drops when we're behind, so neither side ever blocks the other.
-    LLThreadSafeQueue<U64>      mSyncTicks{16};
-    boost::signals2::connection mSyncConnection;
+    // Last compositor present index the viewer thread paced to. The vsync
+    // gate in viewerThreadTick waits for it to advance by RenderVSyncMode.
+    U64 mLastPresent = 0;
 
     // The viewer thread. Runs viewerThreadTick in a loop with its own
     // shared GL context. Spawned at the end of init(), joined in cleanup()

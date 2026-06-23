@@ -67,9 +67,6 @@ public:
     // the next, written by produceFrame() and read by the stats overlay.
     F32 lastFrameMs() const { return mFrameMs.load(std::memory_order_relaxed); }
 
-    // Monotonic count of published frames. Rate = produced FPS.
-    U32 framesProduced() const { return mFramesProduced.load(std::memory_order_relaxed); }
-
 protected:
     // Producers call this when a frame is complete - stamps the cycle
     // metrics.
@@ -82,12 +79,10 @@ protected:
                            std::memory_order_relaxed);
         }
         mLastProduceTime = now; // producer-thread-only
-        mFramesProduced.fetch_add(1, std::memory_order_relaxed);
     }
 
 private:
     std::atomic<F32> mFrameMs{0.f};
-    std::atomic<U32> mFramesProduced{0};
     F64              mLastProduceTime = 0.0;
 };
 

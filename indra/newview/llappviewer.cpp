@@ -88,6 +88,7 @@
 #include "llurldispatcher.h"
 #include "llurlhistory.h"
 #include "llrender.h"
+#include "llimagegl.h"
 #include "llteleporthistory.h"
 #include "lltoast.h"
 #include "llsdutil_math.h"
@@ -589,7 +590,6 @@ static void settings_to_globals()
     LLWorldMapView::setScaleSetting(gSavedSettings.getF32("MapScale"));
 
 #if LL_DARWIN
-    LLWindowMacOSX::sUseMultGL = gSavedSettings.getBOOL("RenderAppleUseMultGL");
     gHiDPISupport = gSavedSettings.getBOOL("RenderHiDPI");
 #endif
 }
@@ -820,6 +820,14 @@ void LLAppViewer::markFrameRendered()
         U32 spins = 0;
         while (mLatestIdx.load(std::memory_order_acquire) != -1)
         {
+            // Bail if we're shutting down: the compositor has stopped
+            // presenting, so it will never claim this publish. Without
+            // this the viewer thread spins forever and the shutdown join
+            // hangs (then pthread_cancel fires on a GL-holding thread).
+            if (LLApp::isExiting() || mCompositor.isShutdownRequested())
+            {
+                return;
+            }
             if (++spins < 64)
             {
                 std::this_thread::yield();
@@ -831,10 +839,18 @@ void LLAppViewer::markFrameRendered()
         }
     }
 
-    // Publish into the mailbox. Fence and flush first so the compositor
-    // can wait on the completed frame GPU-side.
-    mRTs[mBackIdx].placeFrameCompleteFence();
-    glFlush();
+    // Publish into the mailbox. Fence + flush first so the compositor can wait
+    // on the completed frame GPU-side; the fence rides the cross-context color
+    // attachment and placeFrameCompleteFence already flushes - only flush here
+    // when there's no fence to carry it.
+    if (LLImageGL* sync = mRTs[mBackIdx].getColorAttachmentImage())
+    {
+        sync->placeFrameCompleteFence();
+    }
+    else
+    {
+        glFlush();
+    }
 
     S32 old_latest = mLatestIdx.exchange((S32)mBackIdx, std::memory_order_acq_rel);
     if (old_latest != -1)
@@ -853,6 +869,13 @@ void LLAppViewer::markFrameRendered()
         U32 spins = 0;
         while (free_idx == -1)
         {
+            // See the bail above: don't spin into a hung shutdown. We
+            // already published this frame; just keep the same back
+            // buffer (there's no next frame to render into anyway).
+            if (LLApp::isExiting() || mCompositor.isShutdownRequested())
+            {
+                return;
+            }
             if (++spins < 64)
             {
                 std::this_thread::yield();
@@ -885,20 +908,16 @@ bool LLAppViewer::tryAcquireNewFront()
 
 void LLAppViewer::viewerThreadTick()
 {
-    // Vsync pacing (RenderVSyncMode): 0 = off, the world renders as
-    // fast as it can. Otherwise run one tick per compositor sync - the
-    // driver already divides the present cadence via the swap interval,
-    // so waiting for the next sync IS refresh/N pacing. Stale ticks get
-    // drained first so a slow frame doesn't burst afterward. The pop
-    // times out so a stalled compositor can't wedge us, and the
-    // single-thread fallback skips the gate - the sync fires after our
-    // inline tick, so waiting on it would deadlock.
+    // Vsync pacing: the compositor presents every vblank, so run the world
+    // once per RenderVSyncMode presents (refresh/N). Mode 0 runs free.
+    // Single-thread fallback skips the gate (the present happens inline).
     static LLCachedControl<U32> vsync_mode(gSavedSettings, "RenderVSyncMode", 1);
     if ((U32)vsync_mode > 0 && mViewerThread)
     {
-        U64 tick = 0;
-        while (mSyncTicks.tryPop(tick)) {}
-        mSyncTicks.tryPopFor(std::chrono::milliseconds(100), tick);
+        // Block until the compositor presents N more frames. Pacing to
+        // index = last + N drops backlog implicitly (mLastPresent jumps to the
+        // current index) so a hitch doesn't burst; interruptSync() releases it.
+        mLastPresent = mCompositor.waitForPresent(mLastPresent + (U64)vsync_mode);
     }
 
     // Everything the old main loop did runs here, minus the compositor
@@ -1222,7 +1241,10 @@ void LLAppViewer::renderViewerFrame()
 
     // Wait GPU-side until the compositor is done reading the buffer we
     // just picked up as our new back.
-    getBackBuffer().waitReadCompleteFence();
+    if (LLImageGL* sync = getBackBuffer().getColorAttachmentImage())
+    {
+        sync->waitReadCompleteFence();
+    }
 
     display();
 
@@ -1804,9 +1826,8 @@ bool LLAppViewer::init()
 
     // Init is done - spawn the viewer thread. From here on the viewer
     // runs on its own thread and OS main just composites and pumps
-    // events. Windows only for now; other platforms stay single
-    // threaded.
-#if LL_WINDOWS
+    // events. Windows and macOS; other platforms stay single threaded.
+#if LL_WINDOWS || LL_DARWIN
     if (gViewerWindow && gViewerWindow->getWindow())
     {
         mViewerThread = std::make_unique<LLViewerThread>(gViewerWindow->getWindow());
@@ -1913,6 +1934,13 @@ bool LLAppViewer::doFrame()
             gOSMainWork.runFor(kOSMainWorkTime);
         }
 
+        // Run AppKit-only work the viewer thread deferred (cursor updates
+        // on macOS). No-op where the platform has its own window thread.
+        if (gViewerWindow && gViewerWindow->getWindow())
+        {
+            gViewerWindow->getWindow()->drainOSMainQueue();
+        }
+
         if (!gHeadlessClient && gViewerWindow)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Display");
@@ -1959,11 +1987,9 @@ void LLAppViewer::setVSyncMode(U32 mode)
 {
     mode = llclamp(mode, 0u, 4u);
 
-    // The driver does the pacing: swap interval N presents every Nth
-    // vblank, and the sync signal (and the world with it) inherits that
-    // cadence. Mode 0 still presents every vblank - only the world runs
-    // free. The compositor applies it on its own context.
-    mCompositor.setSwapInterval(mode >= 1 ? (S32)mode : 1);
+    // Compositor always presents at vsync; only the world's rate follows
+    // the mode (the sync gate runs it once per Nth present).
+    mCompositor.setSwapInterval(1);
 
     LLPerfStats::tunables.vsyncEnabled = (mode > 0);
     if (mode > 0)
@@ -2037,7 +2063,11 @@ bool LLAppViewer::cleanup()
     // own thread on the way out, since WGL requires that.
     if (mViewerThread)
     {
+        // Unblock both places the viewer thread can park on the compositor:
+        // the mailbox spins (requestShutdown) and the vsync gate (interruptSync).
+        mCompositor.requestShutdown();
         mViewerThread->requestStop();
+        mCompositor.interruptSync();
         mViewerThread->shutdown();
         mViewerThread.reset();
 
@@ -3724,10 +3754,6 @@ bool LLAppViewer::initWindow()
         // Shader objects are shared across the context share group, so
         // the compositor can use this program from the OS main thread.
         mCompositor.setBlitShader(&gCompositorBlitProgram);
-
-        // Sync ticks feed the vsync pacing gate in viewerThreadTick.
-        mSyncConnection = mCompositor.onSync(
-            [this](U64 frame_index) { mSyncTicks.tryPush(frame_index); });
 
         // Seed the vsync mode; the compositor applies the interval on
         // its own context at the first present.

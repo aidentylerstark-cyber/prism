@@ -36,12 +36,14 @@
 #include "llgl.h"
 #include "llstring.h"
 #include "lldir.h"
+#include "llthread.h"
 #include "indra_constants.h"
 
 #include <OpenGL/OpenGL.h>
 #include <Carbon/Carbon.h>
 #include <CoreServices/CoreServices.h>
 #include <CoreGraphics/CGDisplayConfiguration.h>
+#include <CoreVideo/CoreVideo.h>
 
 #include <IOKit/IOCFPlugIn.h>
 #include "llwindowmacosx_iokit.h"
@@ -65,43 +67,6 @@ namespace
 //
 // LLWindowMacOSX
 //
-
-bool LLWindowMacOSX::sUseMultGL = false;
-
-//static
-void LLWindowMacOSX::setUseMultGL(bool use_mult_gl)
-{
-    bool was_enabled = sUseMultGL;
-
-    sUseMultGL = use_mult_gl;
-
-    if (gGLManager.mInited)
-    {
-        CGLContextObj ctx = CGLGetCurrentContext();
-        //enable multi-threaded OpenGL (whether or not sUseMultGL actually changed)
-        if (sUseMultGL)
-        {
-            CGLError cgl_err;
-
-            cgl_err =  CGLEnable( ctx, kCGLCEMPEngine);
-
-            if (cgl_err != kCGLNoError )
-            {
-                LL_INFOS("GLInit") << "Multi-threaded OpenGL not available." << LL_ENDL;
-                sUseMultGL = false;
-            }
-            else
-            {
-                LL_INFOS("GLInit") << "Multi-threaded OpenGL enabled." << LL_ENDL;
-            }
-        }
-        else if (was_enabled)
-        {
-            CGLDisable( ctx, kCGLCEMPEngine);
-            LL_INFOS("GLInit") << "Multi-threaded OpenGL disabled." << LL_ENDL;
-        }
-    }
-}
 
 // Cross-platform bits:
 
@@ -246,14 +211,30 @@ LLWindowMacOSX::LLWindowMacOSX(LLWindowCallbacks* callbacks,
 
 bool callKeyUp(NSKeyEventRef event, unsigned short key, unsigned int mask)
 {
-    mRawKeyEvent = event;
-    bool retVal = gKeyboard->handleKeyUp(key, mask);
-    mRawKeyEvent = NULL;
-    return retVal;
+    if (!gWindowImplementation || !event)
+    {
+        return false;
+    }
+    // Defer the deep handler to the viewer thread. Capture the native key
+    // data by value - the caller's NativeKeyEventData is a stack temporary
+    // that's gone by the time the queue is drained. mRawKeyEvent points at
+    // the captured copy only while the handler runs (drained serially).
+    const NativeKeyEventData data = *event;
+    gWindowImplementation->post([=]()
+    {
+        mRawKeyEvent = &data;
+        gKeyboard->handleKeyUp(key, mask);
+        mRawKeyEvent = NULL;
+    });
+    return false;
 }
 
 bool callKeyDown(NSKeyEventRef event, unsigned short key, unsigned int mask, wchar_t character)
 {
+    if (!gWindowImplementation || !event)
+    {
+        return false;
+    }
     //if (mask!=MASK_NONE)
     {
         if((key == gKeyboard->inverseTranslateKey('Z')) && (character == 'y'))
@@ -266,15 +247,33 @@ bool callKeyDown(NSKeyEventRef event, unsigned short key, unsigned int mask, wch
         }
     }
 
-    mRawKeyEvent = event;
-    bool retVal = gKeyboard->handleKeyDown(key, mask);
-    mRawKeyEvent = NULL;
-    return retVal;
+    const NativeKeyEventData data = *event;
+    gWindowImplementation->post([=]()
+    {
+        mRawKeyEvent = &data;
+        gKeyboard->handleKeyDown(key, mask);
+        mRawKeyEvent = NULL;
+    });
+
+    // keyDown: needs a synchronous accepts-text answer to decide IME
+    // routing, but the real handler runs later on the viewer thread. Use
+    // whether a text control currently holds focus as the proxy (kept on
+    // the OS main thread). IME composition is intentionally OS-main-only.
+    return gWindowImplementation->allowsLanguageInput();
 }
 
 void callResetKeys()
 {
-    gKeyboard->resetKeys();
+    if (!gWindowImplementation)
+    {
+        gKeyboard->resetKeys();
+        return;
+    }
+    // Keep ordering with the deferred key events.
+    gWindowImplementation->post([]()
+    {
+        gKeyboard->resetKeys();
+    });
 }
 
 bool callUnicodeCallback(wchar_t character, unsigned int mask)
@@ -295,18 +294,23 @@ bool callUnicodeCallback(wchar_t character, unsigned int mask)
     eventData.mEventUnmodChars = character;
     eventData.mEventRepeat = false;
 
-    mRawKeyEvent = &eventData;
-
-    bool result = gWindowImplementation->getCallbacks()->handleUnicodeChar(character, mask);
-    mRawKeyEvent = NULL;
-    return result;
+    gWindowImplementation->post([=]()
+    {
+        mRawKeyEvent = &eventData;
+        gWindowImplementation->getCallbacks()->handleUnicodeChar(character, mask);
+        mRawKeyEvent = NULL;
+    });
+    return false;
 }
 
 void callFocus()
 {
     if (gWindowImplementation && gWindowImplementation->getCallbacks())
     {
-        gWindowImplementation->getCallbacks()->handleFocus(gWindowImplementation);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleFocus(gWindowImplementation);
+        });
     }
 }
 
@@ -314,7 +318,10 @@ void callFocusLost()
 {
     if (gWindowImplementation && gWindowImplementation->getCallbacks())
     {
-        gWindowImplementation->getCallbacks()->handleFocusLost(gWindowImplementation);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleFocusLost(gWindowImplementation);
+        });
     }
 }
 
@@ -324,6 +331,7 @@ void callRightMouseDown(float *pos, MASK mask)
     {
         return;
     }
+    // IME commit touches AppKit and must stay on the OS main thread.
     if (gWindowImplementation->allowsLanguageInput())
     {
         gWindowImplementation->interruptLanguageTextInput();
@@ -332,7 +340,11 @@ void callRightMouseDown(float *pos, MASK mask)
     LLCoordGL       outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleRightMouseDown(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleRightMouseDown(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callRightMouseUp(float *pos, MASK mask)
@@ -349,7 +361,11 @@ void callRightMouseUp(float *pos, MASK mask)
     LLCoordGL       outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleRightMouseUp(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleRightMouseUp(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callLeftMouseDown(float *pos, MASK mask)
@@ -366,7 +382,11 @@ void callLeftMouseDown(float *pos, MASK mask)
     LLCoordGL       outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleMouseDown(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleMouseDown(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callLeftMouseUp(float *pos, MASK mask)
@@ -383,8 +403,11 @@ void callLeftMouseUp(float *pos, MASK mask)
     LLCoordGL       outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleMouseUp(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
-
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleMouseUp(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callDoubleClick(float *pos, MASK mask)
@@ -401,14 +424,21 @@ void callDoubleClick(float *pos, MASK mask)
     LLCoordGL   outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleDoubleClick(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleDoubleClick(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callResize(unsigned int width, unsigned int height)
 {
     if (gWindowImplementation && gWindowImplementation->getCallbacks())
     {
-        gWindowImplementation->getCallbacks()->handleResize(gWindowImplementation, width, height);
+        gWindowImplementation->post([=]()
+        {
+            gWindowImplementation->getCallbacks()->handleResize(gWindowImplementation, width, height);
+        });
     }
 }
 
@@ -418,6 +448,9 @@ void callMouseMoved(float *pos, MASK mask)
     {
         return;
     }
+    // Stash the latest position (deltas applied here, on the OS main
+    // thread, so the delta accumulators never cross threads). gatherInput
+    // emits one handleMouseMove per frame from this, matching win32.
     LLCoordGL       outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
@@ -425,8 +458,7 @@ void callMouseMoved(float *pos, MASK mask)
     gWindowImplementation->getMouseDeltas(deltas);
     outCoords.mX += deltas[0];
     outCoords.mY += deltas[1];
-    gWindowImplementation->getCallbacks()->handleMouseMove(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
-    //gWindowImplementation->getCallbacks()->handleScrollWheel(gWindowImplementation, 0);
+    gWindowImplementation->setLatestMousePos(outCoords);
 }
 
 void callMouseDragged(float *pos, MASK mask)
@@ -442,15 +474,22 @@ void callMouseDragged(float *pos, MASK mask)
     gWindowImplementation->getMouseDeltas(deltas);
     outCoords.mX += deltas[0];
     outCoords.mY += deltas[1];
-    gWindowImplementation->getCallbacks()->handleMouseDragged(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    const MASK m = gKeyboard->currentMask(true);
+    gWindowImplementation->postMouseButtonEvent([=]()
+    {
+        gWindowImplementation->getCallbacks()->handleMouseDragged(gWindowImplementation, outCoords, m);
+    });
 }
 
 void callScrollMoved(float deltaX, float deltaY)
 {
     if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
     {
-        gWindowImplementation->getCallbacks()->handleScrollHWheel(gWindowImplementation, deltaX);
-        gWindowImplementation->getCallbacks()->handleScrollWheel(gWindowImplementation, deltaY);
+        gWindowImplementation->post([=]()
+        {
+            gWindowImplementation->getCallbacks()->handleScrollHWheel(gWindowImplementation, deltaX);
+            gWindowImplementation->getCallbacks()->handleScrollWheel(gWindowImplementation, deltaY);
+        });
     }
 }
 
@@ -460,14 +499,20 @@ void callMouseExit()
     {
         return;
     }
-    gWindowImplementation->getCallbacks()->handleMouseLeave(gWindowImplementation);
+    gWindowImplementation->post([]()
+    {
+        gWindowImplementation->getCallbacks()->handleMouseLeave(gWindowImplementation);
+    });
 }
 
 void callWindowFocus()
 {
    if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
     {
-        gWindowImplementation->getCallbacks()->handleFocus (gWindowImplementation);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleFocus(gWindowImplementation);
+        });
     }
     else
     {
@@ -481,7 +526,10 @@ void callWindowUnfocus()
 {
     if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
     {
-        gWindowImplementation->getCallbacks()->handleFocusLost(gWindowImplementation);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleFocusLost(gWindowImplementation);
+        });
     }
 }
 
@@ -489,7 +537,10 @@ void callWindowHide()
 {
     if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
     {
-        gWindowImplementation->getCallbacks()->handleActivate(gWindowImplementation, false);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleActivate(gWindowImplementation, false);
+        });
     }
 }
 
@@ -497,15 +548,28 @@ void callWindowUnhide()
 {
     if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
     {
-        gWindowImplementation->getCallbacks()->handleActivate(gWindowImplementation, true);
+        gWindowImplementation->post([]()
+        {
+            gWindowImplementation->getCallbacks()->handleActivate(gWindowImplementation, true);
+        });
     }
 }
 
 void callWindowDidChangeScreen()
 {
-    if ( gWindowImplementation && gWindowImplementation->getCallbacks() )
+    if ( gWindowImplementation )
     {
-        gWindowImplementation->getCallbacks()->handleWindowDidChangeScreen(gWindowImplementation);
+        // The window may have moved to a display with a different refresh
+        // rate; recompute before the rest of the viewer reacts.
+        gWindowImplementation->updateRefreshRate();
+
+        if ( gWindowImplementation->getCallbacks() )
+        {
+            gWindowImplementation->post([]()
+            {
+                gWindowImplementation->getCallbacks()->handleWindowDidChangeScreen(gWindowImplementation);
+            });
+        }
     }
 }
 
@@ -532,14 +596,17 @@ void callOtherMouseDown(float *pos, MASK mask, int button)
     outCoords.mX += deltas[0];
     outCoords.mY += deltas[1];
 
-    if (button == 2)
+    gWindowImplementation->postMouseButtonEvent([=]()
     {
-        gWindowImplementation->getCallbacks()->handleMiddleMouseDown(gWindowImplementation, outCoords, mask);
-    }
-    else
-    {
-        gWindowImplementation->getCallbacks()->handleOtherMouseDown(gWindowImplementation, outCoords, mask, button + 1);
-    }
+        if (button == 2)
+        {
+            gWindowImplementation->getCallbacks()->handleMiddleMouseDown(gWindowImplementation, outCoords, mask);
+        }
+        else
+        {
+            gWindowImplementation->getCallbacks()->handleOtherMouseDown(gWindowImplementation, outCoords, mask, button + 1);
+        }
+    });
 }
 
 void callOtherMouseUp(float *pos, MASK mask, int button)
@@ -555,14 +622,17 @@ void callOtherMouseUp(float *pos, MASK mask, int button)
     gWindowImplementation->getMouseDeltas(deltas);
     outCoords.mX += deltas[0];
     outCoords.mY += deltas[1];
-    if (button == 2)
+    gWindowImplementation->postMouseButtonEvent([=]()
     {
-        gWindowImplementation->getCallbacks()->handleMiddleMouseUp(gWindowImplementation, outCoords, mask);
-    }
-    else
-    {
-        gWindowImplementation->getCallbacks()->handleOtherMouseUp(gWindowImplementation, outCoords, mask, button + 1);
-    }
+        if (button == 2)
+        {
+            gWindowImplementation->getCallbacks()->handleMiddleMouseUp(gWindowImplementation, outCoords, mask);
+        }
+        else
+        {
+            gWindowImplementation->getCallbacks()->handleOtherMouseUp(gWindowImplementation, outCoords, mask, button + 1);
+        }
+    });
 }
 
 void callModifier(MASK mask)
@@ -768,10 +838,6 @@ bool LLWindowMacOSX::createContext(int x, int y, int width, int height, int bits
 
             GLint numPixelFormats;
             CGLChoosePixelFormat (attribs, &mPixelFormat, &numPixelFormats);
-
-            if(mPixelFormat == NULL) {
-                CGLChoosePixelFormat (attribs, &mPixelFormat, &numPixelFormats);
-            }
         }
 
     }
@@ -793,17 +859,14 @@ bool LLWindowMacOSX::createContext(int x, int y, int width, int height, int bits
         }
     }
 
-    mRefreshRate = CGDisplayModeGetRefreshRate(CGDisplayCopyDisplayMode(mDisplay));
-    if(mRefreshRate == 0)
-    {
-        //consider adding more appropriate fallback later
-        mRefreshRate = DEFAULT_REFRESH_RATE;
-    }
+    updateRefreshRate();
+
+    // Stand up the CVDisplayLink for vblank-paced presents now that
+    // mDisplay is resolved. setSwapInterval below keys off it.
+    startDisplayLink();
 
     // Disable vertical sync for swap
     toggleVSync(enable_vsync);
-
-    setUseMultGL(sUseMultGL);
 
     makeFirstResponder(mWindow, mGLView);
 
@@ -825,6 +888,8 @@ void LLWindowMacOSX::destroyContext()
         // We don't have a context
         return;
     }
+    // Stop the vblank source before tearing the context down.
+    stopDisplayLink();
     // Unhook the GL context from any drawable it may have
     if(mContext != NULL)
     {
@@ -968,8 +1033,73 @@ bool LLWindowMacOSX::getFullscreen()
     return mFullscreen;
 }
 
+void LLWindowMacOSX::post(const std::function<void()>& func)
+{
+    mFunctionQueue.pushFront(func);
+}
+
+void LLWindowMacOSX::postMouseButtonEvent(const std::function<void()>& func)
+{
+    mMouseQueue.pushFront(func);
+}
+
+void LLWindowMacOSX::setLatestMousePos(const LLCoordGL& pos)
+{
+    mMousePos = pos;
+}
+
+void LLWindowMacOSX::runOnOSMain(const std::function<void()>& func)
+{
+    if (on_os_main_thread())
+    {
+        func();
+    }
+    else
+    {
+        mOSMainQueue.pushFront(func);
+    }
+}
+
+void LLWindowMacOSX::drainOSMainQueue()
+{
+    llassert(on_os_main_thread());
+    std::function<void()> func;
+    while (mOSMainQueue.tryPopBack(func))
+    {
+        func();
+    }
+}
+
 void LLWindowMacOSX::gatherInput()
 {
+    // Runs on the viewer thread (the OS main thread captures events and
+    // posts the deep handlers). Drain them here, mirroring
+    // LLWindowWin32::gatherInput.
+    std::function<void()> func;
+
+    // General events (keyboard, scroll, resize, focus) first.
+    while (mFunctionQueue.tryPopBack(func))
+    {
+        func();
+    }
+
+    // One mouse-move per frame, BEFORE mouse buttons, so a click lands at
+    // the latest cursor position. Mask is read here on the viewer thread.
+    if (mMousePos != mLastMousePos)
+    {
+        if (gWindowImplementation && getCallbacks())
+        {
+            getCallbacks()->handleMouseMove(this, mMousePos, gKeyboard->currentMask(true));
+        }
+        mLastMousePos = mMousePos;
+    }
+
+    // Mouse button presses after the move.
+    while (mMouseQueue.tryPopBack(func))
+    {
+        func();
+    }
+
     updateCursor();
 }
 
@@ -1092,6 +1222,15 @@ bool LLWindowMacOSX::setSizeImpl(const LLCoordWindow size)
 
 void LLWindowMacOSX::swapBuffers()
 {
+    // Present runs on the OS main thread, which holds mContext current.
+    llassert(on_os_main_thread());
+    // Pace to vblank off the display link (CGL's swap interval doesn't
+    // reliably block on macOS). interval 0 = unthrottled.
+    const S32 interval = mSwapInterval.load(std::memory_order_relaxed);
+    if (mDisplayLink && interval > 0)
+    {
+        waitForVBlanks(interval);
+    }
     CGLFlushDrawable(mContext);
 }
 
@@ -1256,10 +1395,12 @@ bool LLWindowMacOSX::setCursorPosition(const LLCoordWindow position)
     // Under certain circumstances, this will trigger us to decouple the cursor.
     adjustCursorDecouple(true);
 
-    // trigger mouse move callback
+    // Record the warped position; gatherInput emits the move once per
+    // frame on the viewer thread (don't call handleMouseMove directly -
+    // it would run the deep handler on whatever thread warped the cursor).
     LLCoordGL gl_pos;
     convertCoords(position, &gl_pos);
-    mCallbacks->handleMouseMove(this, gl_pos, (MASK)0);
+    setLatestMousePos(gl_pos);
 
     return result;
 }
@@ -1617,6 +1758,14 @@ static void initPixmapCursor(int cursorid, int hotspotX, int hotspotY)
 
 void LLWindowMacOSX::updateCursor()
 {
+    // NSCursor is AppKit; bounce to the OS main thread when called from
+    // the viewer thread (gatherInput).
+    if (!on_os_main_thread())
+    {
+        runOnOSMain([this]() { updateCursor(); });
+        return;
+    }
+
     S32 result = 0;
 
     if (mDragOverrideCursor != -1)
@@ -1786,6 +1935,11 @@ void LLWindowMacOSX::releaseMouse()
 
 void LLWindowMacOSX::hideCursor()
 {
+    if (!on_os_main_thread())
+    {
+        runOnOSMain([this]() { hideCursor(); });
+        return;
+    }
     if(!mCursorHidden)
     {
         //      LL_INFOS() << "hideCursor: hiding" << LL_ENDL;
@@ -1803,6 +1957,11 @@ void LLWindowMacOSX::hideCursor()
 
 void LLWindowMacOSX::showCursor()
 {
+    if (!on_os_main_thread())
+    {
+        runOnOSMain([this]() { showCursor(); });
+        return;
+    }
     if(mCursorHidden || !isCGCursorVisible())
     {
         //      LL_INFOS() << "showCursor: showing" << LL_ENDL;
@@ -2534,12 +2693,11 @@ public:
 void* LLWindowMacOSX::createSharedContext()
 {
     sharedContext* sc = new sharedContext();
-    CGLCreateContext(mPixelFormat, mContext, &(sc->mContext));
-
-    if (sUseMultGL)
-    {
-        CGLEnable(mContext, kCGLCEMPEngine);
-    }
+    // Share against the primary context's own pixel format so the new
+    // context is renderer-compatible with mContext (which is backed by an
+    // NSOpenGLContext, not by mPixelFormat).
+    CGLPixelFormatObj pixel_format = CGLGetPixelFormat(mContext);
+    CGLCreateContext(pixel_format, mContext, &(sc->mContext));
 
     return (void *)sc;
 }
@@ -2547,25 +2705,6 @@ void* LLWindowMacOSX::createSharedContext()
 void LLWindowMacOSX::makeContextCurrent(void* context)
 {
     CGLSetCurrentContext(((sharedContext*)context)->mContext);
-
-    //enable multi-threaded OpenGL
-    if (sUseMultGL)
-    {
-        CGLError cgl_err;
-        CGLContextObj ctx = CGLGetCurrentContext();
-
-        cgl_err =  CGLEnable( ctx, kCGLCEMPEngine);
-
-        if (cgl_err != kCGLNoError )
-        {
-            LL_INFOS("GLInit") << "Multi-threaded OpenGL not available." << LL_ENDL;
-        }
-        else
-        {
-            LL_INFOS("GLInit") << "Multi-threaded OpenGL enabled." << LL_ENDL;
-        }
-    }
-
 }
 
 void LLWindowMacOSX::destroySharedContext(void* context)
@@ -2577,19 +2716,109 @@ void LLWindowMacOSX::destroySharedContext(void* context)
     delete sc;
 }
 
-void LLWindowMacOSX::toggleVSync(bool enable_vsync)
+void LLWindowMacOSX::updateRefreshRate()
 {
-    GLint frames_per_swap = 0;
-    if (!enable_vsync)
+    if (!mWindow)
     {
-        frames_per_swap = 0;
-    }
-    else
-    {
-        frames_per_swap = 1;
+        return;
     }
 
+    mDisplay = (CGDirectDisplayID)getWindowDisplayID(mWindow);
+
+    const double rate = getWindowRefreshRate(mWindow);
+    mRefreshRate = (rate > 0.0) ? (S32)llround(rate) : DEFAULT_REFRESH_RATE;
+
+    mIsDynamicRefresh = isWindowDynamicRefresh(mWindow);
+
+    // Follow the window onto its new display so vblank pacing matches the
+    // refresh rate the window is actually presenting against.
+    if (mDisplayLink)
+    {
+        CVDisplayLinkSetCurrentCGDisplay((CVDisplayLinkRef)mDisplayLink, mDisplay);
+    }
+}
+
+// CVDisplayLink output callback - fires once per vblank on a dedicated
+// high-priority CoreVideo thread.
+static CVReturn sDisplayLinkCallback(CVDisplayLinkRef /*link*/,
+                                     const CVTimeStamp* /*now*/,
+                                     const CVTimeStamp* /*output*/,
+                                     CVOptionFlags /*flagsIn*/,
+                                     CVOptionFlags* /*flagsOut*/,
+                                     void* ctx)
+{
+    static_cast<LLWindowMacOSX*>(ctx)->onVBlank();
+    return kCVReturnSuccess;
+}
+
+void LLWindowMacOSX::startDisplayLink()
+{
+    if (mDisplayLink)
+    {
+        return;
+    }
+    CVDisplayLinkRef link = nullptr;
+    if (CVDisplayLinkCreateWithCGDisplay(mDisplay, &link) != kCVReturnSuccess || !link)
+    {
+        LL_WARNS("Window") << "CVDisplayLink creation failed; falling back to "
+                              "CGL swap interval for vsync." << LL_ENDL;
+        mDisplayLink = nullptr;
+        return;
+    }
+    CVDisplayLinkSetOutputCallback(link, &sDisplayLinkCallback, this);
+    CVDisplayLinkStart(link);
+    mDisplayLink = link;
+}
+
+void LLWindowMacOSX::stopDisplayLink()
+{
+    if (!mDisplayLink)
+    {
+        return;
+    }
+    CVDisplayLinkRef link = (CVDisplayLinkRef)mDisplayLink;
+    CVDisplayLinkStop(link);
+    CVDisplayLinkRelease(link);
+    mDisplayLink = nullptr;
+    // Wake any present waiting on a vblank so it doesn't block on a dead link.
+    mVBlankCond.notify_all();
+}
+
+void LLWindowMacOSX::onVBlank()
+{
+    {
+        std::lock_guard<std::mutex> lock(mVBlankMutex);
+        ++mVBlankCount;
+    }
+    mVBlankCond.notify_all();
+}
+
+void LLWindowMacOSX::waitForVBlanks(S32 interval)
+{
+    std::unique_lock<std::mutex> lock(mVBlankMutex);
+    const U64 target = mLastSwapVBlank + (U64)interval;
+    // Time out so a stalled link (display sleep, etc.) can't wedge present.
+    mVBlankCond.wait_for(lock, std::chrono::milliseconds(100),
+                         [&]{ return mVBlankCount >= target; });
+    // Resync to the actual count - if we fell behind we pace to the current
+    // vblank rather than bursting to catch up.
+    mLastSwapVBlank = mVBlankCount;
+}
+
+void LLWindowMacOSX::setSwapInterval(S32 interval)
+{
+    mSwapInterval.store(llmax(interval, 0), std::memory_order_relaxed);
+
+    // When the display link is driving the pacing, disable CGL's own
+    // (unreliable) vsync so the two don't fight. Without a link, fall back
+    // to the CGL swap interval - imperfect, but better than nothing.
+    GLint frames_per_swap = mDisplayLink ? 0 : (GLint)llmax(interval, 0);
     CGLSetParameter(mContext, kCGLCPSwapInterval, &frames_per_swap);
+}
+
+void LLWindowMacOSX::toggleVSync(bool enable_vsync)
+{
+    setSwapInterval(enable_vsync ? 1 : 0);
 }
 
 void LLWindowMacOSX::interruptLanguageTextInput()

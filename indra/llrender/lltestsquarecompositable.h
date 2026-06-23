@@ -30,9 +30,6 @@
 #include "llcompositable.h"
 #include "llrendertarget.h"
 #include "llthread.h"
-#include "llthreadsafequeue.h"
-
-#include <boost/signals2.hpp>
 
 class LLCompositor;
 class LLWindow;
@@ -40,8 +37,8 @@ class LLWindow;
 // Compositor bring-up test layer, and a miniature model of the real
 // producer architecture: a dedicated thread with its own shared GL context
 // paints a sweeping bar into its own RT and publishes it through the
-// cross-context fence pair, paced by the compositor's sync signal
-// delivered over a queue.
+// cross-context fence pair, paced to the compositor's present clock via
+// waitForPresent.
 class LLTestSquareCompositable : public LLCompositable, public LLThread
 {
 public:
@@ -56,7 +53,7 @@ public:
                              U32 size = 100);
     ~LLTestSquareCompositable() override;
 
-    // Subscribe to the compositor's sync signal and start the producer
+    // Store the compositor (for the present clock) and start the producer
     // thread. Call on the compositor's thread.
     void connect(LLCompositor& compositor);
 
@@ -71,15 +68,13 @@ public:
 
 protected:
     // - LLThread -------------------------------------------------------
-    // Producer loop: make the shared context current, allocate the RT,
-    // then consume sync ticks until the quit sentinel arrives.
+    // Producer loop: make the shared context current, allocate the RT, then
+    // pace to the compositor's present clock until disconnect.
     void run() override;
 
 private:
     // Fill the RT's color texture: solid color + sweep bar at mStep.
     void paint();
-
-    static constexpr U64 kQuitTick = ~U64(0);
 
     LLRenderTarget mRT;
     std::string mName;
@@ -93,12 +88,8 @@ private:
     LLWindow* mWindow;
     void*     mContext;
 
-    // Sync ticks from the compositor. Bounded, and the handler uses
-    // tryPush, so a slow square never blocks the compositor - extra
-    // ticks just drop.
-    LLThreadSafeQueue<U64> mTicks{64};
-
-    boost::signals2::connection mSyncConnection;
+    LLCompositor* mCompositor = nullptr; // present clock (waitForPresent)
+    U64           mLastTick = 0;         // last present index we paced to
 };
 
 #endif // LL_LLTESTSQUARECOMPOSITABLE_H

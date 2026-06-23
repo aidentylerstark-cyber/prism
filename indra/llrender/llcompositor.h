@@ -31,9 +31,9 @@
 #include "llswapchain.h"
 #include "llcompositable.h"
 
-#include <boost/signals2.hpp>
-
 #include <atomic>
+#include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -67,7 +67,7 @@ public:
     // Tear everything down. Called before window destruction.
     void release();
 
-    bool isInitialized() const { return mSwapChain.getImageCount() > 0; }
+    bool isInitialized() const { return mSwapChain.isAttached(); }
 
     // Add a compositable. Lower-index layers draw first (bottom). Order is
     // fixed at registration; no re-ordering yet.
@@ -88,18 +88,34 @@ public:
     // its last front re-drawn.
     void presentFrame();
 
+    // Signal shutdown so producers stop waiting on us. Once set, the
+    // compositor stops presenting and any producer parked waiting for a
+    // present (e.g. the mailbox back-pressure spins) bails out, so the
+    // viewer thread can reach its quit check and the join completes.
+    // Callable from any thread; checked via isShutdownRequested().
+    void requestShutdown() { mShutdownRequested.store(true, std::memory_order_relaxed); }
+    bool isShutdownRequested() const { return mShutdownRequested.load(std::memory_order_relaxed); }
+
     // Present every Nth vblank (1 = every vblank). The driver does the
     // pacing and the sync signal inherits the divided cadence. Callable
     // from any thread - applied on our own context at the next present.
     void setSwapInterval(S32 interval) { mPendingSwapInterval.store(interval, std::memory_order_relaxed); }
 
-    // Fired at the end of presentFrame() with the frame index. Compositables
-    // subscribe to this to pace themselves to our clock.
-    typedef boost::signals2::signal<void(U64 frame_index)> sync_signal_t;
-    boost::signals2::connection onSync(const sync_signal_t::slot_type& cb)
-    {
-        return mOnSync.connect(cb);
-    }
+    // Producers pace themselves to the present (vblank) clock by waiting on a
+    // published monotonic present index. waitForPresent blocks until the index
+    // reaches `target` (or the compositor shuts down / should_stop fires) and
+    // returns the current index; a value < target means it was interrupted.
+    // Pace to every Nth present by waiting for index = last + N.
+    U64 waitForPresent(U64 target, const std::function<bool()>& should_stop = {});
+
+    // Permanently release every producer parked in waitForPresent (full
+    // compositor/viewer shutdown). Sticky: subsequent waits return at once.
+    void interruptSync();
+
+    // Wake producers parked in waitForPresent so they re-check their own
+    // should_stop - for a producer disconnecting while the compositor keeps
+    // running (e.g. a debug test square toggled off). Non-sticky.
+    void wakeSyncWaiters();
 
     // Read access for resize handling and similar plumbing. Presenting
     // stays in here.
@@ -133,9 +149,12 @@ private:
     LLSwapChain                   mSwapChain;
     LLWindow*                     mWindow = nullptr;
     std::vector<LLCompositable*>  mCompositables;
-    sync_signal_t                 mOnSync;
-    U64                           mFrameIndex = 0;
+    std::mutex                    mSyncMutex;
+    std::condition_variable       mSyncCV;
+    U64                           mPresentIndex = 0;     // published present (vblank) count
+    bool                          mSyncInterrupted = false; // sticky full-shutdown release
     std::atomic<S32>              mPendingSwapInterval{-1}; // applied at next present; -1 = none
+    std::atomic<bool>            mShutdownRequested{false}; // set on shutdown to unblock producers
 
     // Bring-up refresh overlay: colored squares that repaint at
     // different sync intervals, behind RenderCompositorShowRefresh.

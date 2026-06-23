@@ -29,6 +29,7 @@
 
 #include "llcompositor.h"
 #include "llrender.h"
+#include "llimagegl.h"
 #include "llwindow.h"
 
 #include <vector>
@@ -59,22 +60,16 @@ LLTestSquareCompositable::~LLTestSquareCompositable()
 
 void LLTestSquareCompositable::connect(LLCompositor& compositor)
 {
-    // Runs on the compositor's thread at the end of every present. tryPush
-    // means a full queue just drops the tick - we never block the
-    // compositor.
-    mSyncConnection = compositor.onSync(
-        [this](U64 frame_index) { mTicks.tryPush(frame_index); });
-
+    mCompositor = &compositor;
     start();
 }
 
 void LLTestSquareCompositable::disconnect()
 {
-    mSyncConnection.disconnect();
     if (!isStopped())
     {
         setQuitting();
-        mTicks.tryPush(kQuitTick);
+        if (mCompositor) mCompositor->wakeSyncWaiters(); // break our waitForPresent
         shutdown(); // joins
     }
 }
@@ -92,40 +87,49 @@ void LLTestSquareCompositable::run()
 
     // First frame so the layer shows up before the first tick.
     paint();
-    mRT.placeFrameCompleteFence();
-    glFlush();
+    if (LLImageGL* sync = mRT.getColorAttachmentImage())
+    {
+        sync->placeFrameCompleteFence(); // also flushes
+    }
+    else
+    {
+        glFlush();
+    }
     produceFrame();
 
     while (!isQuitting())
     {
-        U64 tick = 0;
-        try
+        // Pace to the compositor's present clock; the should_stop predicate +
+        // wakeSyncWaiters (on disconnect) break the wait promptly.
+        U64 tick = mCompositor->waitForPresent(mLastTick + 1, [this]{ return isQuitting(); });
+        if (tick <= mLastTick || isQuitting())
         {
-            tick = mTicks.pop(); // blocks until the next sync tick
+            break; // interrupted (disconnect / shutdown)
         }
-        catch (const LLThreadSafeQueueInterrupt&)
-        {
-            break; // queue closed
-        }
-
-        if (tick == kQuitTick || isQuitting())
-        {
-            break;
-        }
+        mLastTick = tick;
 
         if (tick % mInterval == 0)
         {
             // Don't overwrite pixels the compositor may still be
             // copying - GPU-side wait on its read-complete fence.
-            mRT.waitReadCompleteFence();
+            if (LLImageGL* sync = mRT.getColorAttachmentImage())
+            {
+                sync->waitReadCompleteFence();
+            }
 
             mStep = (mStep + 3) % mSize;
             paint();
 
             // Publish: the compositor waits on this fence before sampling.
-            // Flush so the other context can actually see it.
-            mRT.placeFrameCompleteFence();
-            glFlush();
+            // placeFrameCompleteFence flushes so the other context sees it.
+            if (LLImageGL* sync = mRT.getColorAttachmentImage())
+            {
+                sync->placeFrameCompleteFence();
+            }
+            else
+            {
+                glFlush();
+            }
             produceFrame();
         }
     }
@@ -170,8 +174,8 @@ void LLTestSquareCompositable::paint()
         }
     }
 
-    LLScopedTexName tex = mRT.getTexture(0);
-    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, tex.get());
+    U32 tex = mRT.getTexture(0);
+    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)mSize, (GLsizei)mSize,
                     GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);

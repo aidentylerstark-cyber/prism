@@ -1,6 +1,6 @@
 /**
  * @file llswapchain.h
- * @brief Backend-agnostic swap chain wrapping the window's presentation images.
+ * @brief Backend-agnostic presentation surface for the window.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -29,79 +29,69 @@
 
 #include "llrendertarget.h"
 
-#include <vector>
-
 class LLWindow;
 
-// Owns the collection of LLRenderTargets that act as the window's presentation
-// images, plus the present primitive itself. The viewer acquires an image
-// each frame, renders into it via the usual LLRenderTarget interface, then
-// asks the swap chain to present.
+// Backend-agnostic presentation surface. The compositor acquires the surface
+// each frame, binds it as the render target, composites into it, then presents.
 //
-// GL backend (today): the chain holds N off-screen color+depth FBOs sized to
-// the window. acquireNextImage() rotates the index. present() blits the
-// current image's color to FBO 0 and calls swapBuffers(). The literal 0
-// only appears inside present() - viewer code never names it.
+// GL backend (today): zero-copy, and there are no images to own. The present
+// surface is the window's default framebuffer (FBO 0): bindForRender() binds 0
+// with the full-window viewport, present() calls swapBuffers(). The driver
+// double-buffers the back buffer under SwapBuffers, so the swap chain just
+// holds the window and dimensions. FBO 0 is named only here - never in
+// LLRenderTarget, which stays a pure off-screen RT.
 //
-// Vulkan / OpenXR backends (future): mImages map onto the runtime's actual
-// swap chain images; acquireNextImage / present become the real WSI calls
-// (vkAcquireNextImageKHR / vkQueuePresentKHR or xrAcquire/Release pairs).
-// The viewer code that uses this interface doesn't change.
+// Vulkan / OpenXR backends (future): own the runtime's real swap-chain images.
+// acquireNextImage becomes vkAcquireNextImageKHR / xrAcquireSwapchainImage,
+// bindForRender binds the acquired image's framebuffer, and present becomes
+// vkQueuePresentKHR / xrReleaseSwapchainImage. The compositor interface is
+// unchanged.
 class LLSwapChain
 {
 public:
-    // How many images cycle in the chain. 2 is the minimum useful number;
-    // there is no parallelism gain on GL above 2 (the driver does its own
-    // back-buffer rotation under SwapBuffers).
-    static constexpr U32 kImageCount = 2;
-
     LLSwapChain() = default;
     ~LLSwapChain();
 
     LLSwapChain(const LLSwapChain&) = delete;
     LLSwapChain& operator=(const LLSwapChain&) = delete;
 
-    // GL backend: allocates kImageCount off-screen color+depth RTs at
-    // (width, height) and remembers the window so present() can swapBuffers.
+    // GL: remember the window so present() can swapBuffers; record dimensions.
     void attachToWindow(LLWindow* window, U32 width, U32 height);
 
-    // Resize all images to (width, height). No-op on zero dimensions.
+    // Update the presentation dimensions. GL: FBO 0 follows the window, so this
+    // just records the size - nothing to reallocate. No-op on zero dimensions.
     void resize(U32 width, U32 height);
 
-    // Rotate to the next image in the chain and return it. Render into the
-    // returned RT this frame; call present() when done. Each call to
-    // acquireNextImage() should be balanced 1:1 with a present().
-    LLRenderTarget& acquireNextImage();
+    // Acquire the next presentable image. GL: structural - the driver owns the
+    // back-buffer rotation under SwapBuffers. Vk/XR: the real WSI acquire.
+    // Balance 1:1 with present().
+    void acquireNextImage();
 
-    // Image currently being rendered into (or just rendered). Use for
-    // readback consumers that want the in-progress frame.
-    LLRenderTarget& getCurrentImage();
+    // Bind the acquired image as the render target for compositing. GL: binds
+    // the default framebuffer (FBO 0) with the full-window viewport.
+    void bindForRender();
 
-    // Most recently presented image - i.e. the one whose contents are on
-    // screen right now. Useful for consumers (scene monitor) that want the
-    // last visible frame rather than the half-rendered current one.
-    LLRenderTarget& getPreviousImage();
-
-    // Blit the current image's color to FBO 0 and call window->swapBuffers().
+    // Present the composited image. GL: swapBuffers(). Vk/XR: the real present.
     void present();
 
-    // SwapBuffers only - for callers (LLCompositor's shader composite)
-    // that have already drawn the frame directly into FBO 0.
-    void presentDirect();
+    // Bind the present surface as GL_READ_FRAMEBUFFER for readback consumers
+    // (the scene monitor reading the on-screen frame). Pair with unbindRead().
+    void bindForRead();
+    void unbindRead();
 
-    // Drop image resources and detach. Safe to call redundantly.
+    // Drop resources and detach. Safe to call redundantly.
     void release();
+
+    // True once attachToWindow has run (and before release).
+    bool isAttached() const { return mWindow != nullptr; }
 
     U32 getWidth() const  { return mWidth; }
     U32 getHeight() const { return mHeight; }
-    U32 getImageCount() const { return (U32)mImages.size(); }
 
 private:
-    std::vector<LLRenderTarget> mImages;
-    U32        mCurrentIndex = 0;
-    LLWindow*  mWindow       = nullptr;
-    U32        mWidth        = 0;
-    U32        mHeight       = 0;
+    LLWindow*  mWindow = nullptr;
+    U32        mWidth  = 0;
+    U32        mHeight = 0;
 };
 
 #endif // LL_LLSWAPCHAIN_H

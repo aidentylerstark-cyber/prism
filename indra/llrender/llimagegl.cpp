@@ -1745,12 +1745,17 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
     LL_PROFILE_ZONE_SCOPED;
     llassert(!on_viewer_thread());
 
-    // Take and drop a unique lease - the release hook places the fence
-    // the consumer will wait on.
+    // This name is produced off the viewer thread, so the image is genuinely
+    // cross-thread: opt into cross-context sync before the first use below.
+    setNeedsCrossContextSync(true);
+
+    // Place the frame-complete fence the viewer thread waits on before it
+    // installs the new name. Under the unique lease so a second upload can't
+    // race it.
     {
         LL_PROFILE_ZONE_NAMED("cglt - sync");
         LLUniqueLease lease = getUniqueLease();
-        // release places fence + glFlush via the hook
+        placeFrameCompleteFence();
     }
 
     ref();
@@ -1768,62 +1773,88 @@ void LLImageGL::syncToMainThread(LLGLuint new_tex_name)
     LL_PROFILER_GPU_COLLECT;
 }
 
-// ---- LLGPUResource hooks --------------------------------------------------
+// ---- Cross-context GPU sync ------------------------------------------------
 
-void LLImageGL::onUniqueRelease()
+// Wrap a fresh fence in a shared_ptr that deletes it when the last reference
+// drops. Sync objects belong to the share group, so either context can do the
+// delete.
+static std::shared_ptr<void> make_fence()
 {
-    if (on_viewer_thread())
-    {
-        // No cross-context handoff on main thread.
-        return;
-    }
-
-    // Replace any prior fence. We hold the unique lock, so nothing can
-    // be mid-wait on the old one.
-    if (mPendingFence != nullptr)
-    {
-        glDeleteSync(mPendingFence);
-        mPendingFence = nullptr;
-    }
-
-    glFlush();
-    mPendingFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    mPendingFenceThread.store(std::this_thread::get_id(), std::memory_order_release);
-    glFlush();
+    return std::shared_ptr<void>(
+        glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0),
+        [](void* sync) { if (sync) glDeleteSync((GLsync)sync); });
 }
 
-void LLImageGL::onSharedAcquire()
+void LLImageGL::setNeedsCrossContextSync(bool b)
 {
-    // Multiple shared holders can wait on the same fence - that's fine.
-    // The next unique holder cleans it up.
-    if (mPendingFence != nullptr &&
-        mPendingFenceThread.load(std::memory_order_acquire) != std::this_thread::get_id())
+    if (b && !mCrossSync)
     {
-        glWaitSync(mPendingFence, 0, GL_TIMEOUT_IGNORED);
+        mCrossSync = std::make_shared<CrossContextSync>();
+    }
+    else if (!b)
+    {
+        mCrossSync.reset();
+    }
+    // Cross-context textures take the CPU lease too (field accessors);
+    // single-context textures pay neither.
+    setLeaseEnabled(b);
+}
+
+void LLImageGL::placeFrameCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence = make_fence();
+    glFlush(); // so the consumer's context can see it
+    std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+    mCrossSync->frameCompleteFence = std::move(fence);
+}
+
+void LLImageGL::waitFrameCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence;
+    {
+        std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+        fence = mCrossSync->frameCompleteFence;
+    }
+    if (fence)
+    {
+        // Server-side wait; the held shared_ptr keeps the sync alive even if
+        // the producer swaps in a new one mid-wait.
+        glWaitSync((GLsync)fence.get(), 0, GL_TIMEOUT_IGNORED);
     }
 }
 
-void LLImageGL::onUniqueAcquire()
+void LLImageGL::placeReadCompleteFence()
 {
-    if (mPendingFence != nullptr &&
-        mPendingFenceThread.load(std::memory_order_acquire) != std::this_thread::get_id())
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence = make_fence();
+    glFlush();
+    std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+    mCrossSync->readCompleteFence = std::move(fence);
+}
+
+void LLImageGL::waitReadCompleteFence()
+{
+    if (!mCrossSync) return;
+    std::shared_ptr<void> fence;
     {
-        glWaitSync(mPendingFence, 0, GL_TIMEOUT_IGNORED);
+        std::lock_guard<std::mutex> lock(mCrossSync->fenceMutex);
+        fence = mCrossSync->readCompleteFence;
     }
-    // Exclusive - drop the fence so the next release can place a fresh one.
-    if (mPendingFence != nullptr)
+    if (fence)
     {
-        glDeleteSync(mPendingFence);
-        mPendingFence = nullptr;
+        glWaitSync((GLsync)fence.get(), 0, GL_TIMEOUT_IGNORED);
     }
 }
 
 
 void LLImageGL::syncTexName(LLGLuint texname)
 {
-    // We're changing mTexName, so take the unique lease. Acquiring also
-    // waits on any pending fence.
+    // We're changing mTexName, so take the unique lease, and wait the
+    // frame-complete fence so the new pixels are done before the name goes live.
     LLUniqueLease lease = getUniqueLease();
+    waitFrameCompleteFence();
     if (texname != 0)
     {
         if (mTexName != 0 && mTexName != texname)
@@ -2440,7 +2471,16 @@ bool LLImageGL::getHasGLTexture() const
 
 LLScopedTexName LLImageGL::getTexName() const
 {
+    // Opt-in lease: ordinary textures aren't leasable, so getSharedLease()
+    // returns an empty lease and the bind hot path stays lock-free. A
+    // cross-context texture (mailbox color, CEF) takes the shared read lease
+    // here - the reader half of its reader/writer lock.
     return LLScopedTexName(getSharedLease(), mTexName);
+}
+
+LLGLuint LLImageGL::getTexNameRaw() const
+{
+    return mTexName;
 }
 
 bool LLImageGL::getMask(const LLVector2 &tc)

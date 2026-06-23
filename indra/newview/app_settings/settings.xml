@@ -7336,17 +7336,6 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
-    <key>RenderAppleUseMultGL</key>
-    <map>
-      <key>Comment</key>
-      <string>Whether we want to use multi-threaded OpenGL on Apple hardware (requires restart of SL).</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
     <key>RenderAttachedLights</key>
         <map>
         <key>Comment</key>

@@ -33,6 +33,10 @@
 #include "llviewerwindow.h"
 #include "llwindow.h"
 
+#if LL_DARWIN
+#include "llwindowmacosx-objc.h"
+#endif
+
 LLViewerThread::LLViewerThread(LLWindow* window)
 :   LLThread("Viewer"),
     mWindow(window),
@@ -87,7 +91,16 @@ void LLViewerThread::run()
     // unblocks us and we fall out of the loop.
     while (!isQuitting())
     {
+#if LL_DARWIN
+        // This thread has no Cocoa run loop; drain an autorelease pool
+        // per tick so transient ObjC objects don't leak until exit.
+        ll_macos_run_in_autorelease_pool([]()
+        {
+            LLAppViewer::instance()->viewerThreadTick();
+        });
+#else
         LLAppViewer::instance()->viewerThreadTick();
+#endif
     }
 
     LL_INFOS("Viewer") << "Viewer thread exiting, destroying context."
@@ -96,7 +109,14 @@ void LLViewerThread::run()
     // The old main loop's exit tail (final snapshot, voice, service
     // pump, watchdog), run while the world and our GL context are still
     // intact - cleanup is blocked joining us.
+#if LL_DARWIN
+    ll_macos_run_in_autorelease_pool([]()
+    {
+        LLAppViewer::instance()->viewerThreadShutdown();
+    });
+#else
     LLAppViewer::instance()->viewerThreadShutdown();
+#endif
 
     // Tear down per-thread gGL before destroying the context.
     gGL.shutdown();

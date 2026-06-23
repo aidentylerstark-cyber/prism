@@ -316,7 +316,7 @@ void LLSceneMonitor::capture()
         // Read from the most recently presented swap chain image - the
         // frame the user is actually seeing. The compositor owns the
         // swap chain now.
-        LLRenderTarget& src = const_cast<LLSwapChain&>(LLAppViewer::instance()->getCompositor().getSwapChain()).getPreviousImage();
+        LLSwapChain& src = const_cast<LLSwapChain&>(LLAppViewer::instance()->getCompositor().getSwapChain());
         src.bindForRead();
 
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, cur_target.getWidth(), cur_target.getHeight()); //copy the content

@@ -238,9 +238,91 @@ GLViewRef createOpenGLView(NSWindowRef window, unsigned int samples, bool vsync)
     return glview;
 }
 
-void glSwapBuffers(void* context)
+// CGDirectDisplayID of the screen the window currently occupies. Falls
+// back to the main display if the window isn't on a screen yet.
+unsigned int getWindowDisplayID(NSWindowRef window)
 {
-    [(NSOpenGLContext*)context flushBuffer];
+    NSScreen *screen = [(LLNSWindow*)window screen];
+    NSNumber *num = screen ? screen.deviceDescription[@"NSScreenNumber"] : nil;
+    return num ? (unsigned int)[num unsignedIntValue] : (unsigned int)CGMainDisplayID();
+}
+
+// Refresh rate of the window's current display. Uses the fixed display
+// mode rate when available; ProMotion / built-in panels report 0 there,
+// so fall back to the screen's maximum frames-per-second. Returns 0 if
+// nothing usable is found.
+double getWindowRefreshRate(NSWindowRef window)
+{
+    CGDirectDisplayID did = (CGDirectDisplayID)getWindowDisplayID(window);
+
+    double rate = 0.0;
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(did);
+    if (mode)
+    {
+        rate = CGDisplayModeGetRefreshRate(mode);
+        CGDisplayModeRelease(mode);
+    }
+
+    if (rate == 0.0)
+    {
+        if (@available(macOS 12.0, *))
+        {
+            NSScreen *screen = [(LLNSWindow*)window screen];
+            if (screen)
+            {
+                rate = (double)screen.maximumFramesPerSecond;
+            }
+        }
+    }
+
+    return rate;
+}
+
+// True when the window's display runs a variable refresh rate (ProMotion).
+// macOS 14 exposes the min/max refresh interval directly; older systems
+// fall back to comparing the screen's max FPS against the fixed mode rate.
+bool isWindowDynamicRefresh(NSWindowRef window)
+{
+    NSScreen *screen = [(LLNSWindow*)window screen];
+    if (!screen)
+    {
+        return false;
+    }
+
+    if (@available(macOS 14.0, *))
+    {
+        return screen.minimumRefreshInterval != screen.maximumRefreshInterval;
+    }
+
+    if (@available(macOS 12.0, *))
+    {
+        CGDirectDisplayID did = (CGDirectDisplayID)getWindowDisplayID(window);
+        double fixed_rate = 0.0;
+        CGDisplayModeRef mode = CGDisplayCopyDisplayMode(did);
+        if (mode)
+        {
+            fixed_rate = CGDisplayModeGetRefreshRate(mode);
+            CGDisplayModeRelease(mode);
+        }
+        const double max_fps = (double)screen.maximumFramesPerSecond;
+        // A boost rate above the fixed mode rate (or a panel that reports
+        // no fixed rate but can exceed 60) implies a dynamic display.
+        return (fixed_rate > 0.0) ? (max_fps > fixed_rate) : (max_fps > 60.0);
+    }
+
+    return false;
+}
+
+void ll_macos_run_in_autorelease_pool(const std::function<void()>& func)
+{
+    // The viewer thread has no Cocoa run loop, so nothing drains an
+    // autorelease pool for it. Wrap each unit of work so transient ObjC
+    // objects (fonts, file paths, clipboard, etc.) are released promptly
+    // instead of leaking until the thread exits.
+    @autoreleasepool
+    {
+        func();
+    }
 }
 
 CGLContextObj getCGLContextObj(GLViewRef view)

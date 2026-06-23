@@ -29,6 +29,7 @@
 #include "llswapchain.h"
 
 #include "llgl.h"
+#include "llrendertarget.h"
 #include "llwindow.h"
 
 
@@ -40,28 +41,11 @@ LLSwapChain::~LLSwapChain()
 void LLSwapChain::attachToWindow(LLWindow* window, U32 width, U32 height)
 {
     llassert(window != nullptr);
-    llassert(mImages.empty()); // call release() before re-attaching
     llassert(width > 0 && height > 0);
 
     mWindow = window;
     mWidth  = width;
     mHeight = height;
-
-    // Allocate kImageCount off-screen color+depth RTs at window resolution.
-    // Each carries the swap-chain-image flag so its bindTarget restores the
-    // world-view viewport when intermediate RTs pop back to it during rendering.
-    mImages.resize(kImageCount);
-    for (auto& img : mImages)
-    {
-        if (!img.allocate(width, height, GL_RGBA, /*depth=*/true))
-        {
-            LL_WARNS("SwapChain") << "Failed to allocate swap chain image at "
-                                  << width << "x" << height << LL_ENDL;
-        }
-        img.markAsSwapChainImage(true);
-    }
-
-    mCurrentIndex = 0;
 
     // From now on, top-level RT flushes must have a parent on the stack.
     // Pre-attach paths (gpu_benchmark in feature-manager init, etc.) ran
@@ -73,82 +57,54 @@ void LLSwapChain::resize(U32 width, U32 height)
 {
     if (width == 0 || height == 0)
     {
-        return; // minimized / iconified - keep existing storage
+        return; // minimized / iconified - keep existing dimensions
     }
 
     mWidth  = width;
     mHeight = height;
-
-    for (auto& img : mImages)
-    {
-        img.resize(width, height);
-    }
+    // GL: the default framebuffer follows the window; nothing to reallocate.
 }
 
-LLRenderTarget& LLSwapChain::acquireNextImage()
+void LLSwapChain::acquireNextImage()
 {
-    llassert(!mImages.empty());
-
-    // Rotate to the next image. GL has no real "acquire" - the driver owns
-    // the back buffer rotation under SwapBuffers - so this is just structural
-    // cycling. Vk/XR backends will do the real WSI acquire here.
-    mCurrentIndex = (mCurrentIndex + 1) % (U32)mImages.size();
-    return mImages[mCurrentIndex];
+    // GL: no real acquire - the driver owns the back-buffer rotation under
+    // SwapBuffers. Vk/XR backends do the WSI acquire here.
 }
 
-LLRenderTarget& LLSwapChain::getCurrentImage()
+void LLSwapChain::bindForRender()
 {
-    llassert(!mImages.empty());
-    return mImages[mCurrentIndex];
-}
-
-LLRenderTarget& LLSwapChain::getPreviousImage()
-{
-    llassert(!mImages.empty());
-    const U32 n = (U32)mImages.size();
-    const U32 prev = (mCurrentIndex + n - 1) % n;
-    return mImages[prev];
+    // Composite straight into the window's default framebuffer (FBO 0), full
+    // window - zero-copy. The driver double-buffers under swapBuffers. FBO 0 is
+    // named only here; LLRenderTarget never knows about it.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    LLRenderTarget::sCurFBO = 0;
+    glDrawBuffer(GL_BACK);
+    glReadBuffer(GL_BACK);
+    glViewport(0, 0, mWidth, mHeight);
+    LLRenderTarget::sCurResX = mWidth;
+    LLRenderTarget::sCurResY = mHeight;
 }
 
 void LLSwapChain::present()
 {
-    llassert(!mImages.empty());
     llassert(mWindow != nullptr);
 
-    LLRenderTarget& img = mImages[mCurrentIndex];
-
-    // Blit the current image's color into FBO 0, then SwapBuffers.
-    // This is the only place in the codebase that names FBO 0 by literal.
-    {
-        LL_PROFILE_GPU_ZONE("swapchain present blit");
-
-        // Hold a shared lease on the image while we blit from it.
-        LLSharedLease img_lease = img.getSharedLease();
-
-        // Save current read FB so we don't disturb anyone else's state.
-        // (sCurFBO tracks the current draw FB; flush() asserts it matches.)
-        const U32 prev_fbo = LLRenderTarget::sCurFBO;
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, img.getFBO());
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glDrawBuffer(GL_BACK);
-
-        glBlitFramebuffer(0, 0, (GLint)mWidth, (GLint)mHeight,
-                          0, 0, (GLint)mWidth, (GLint)mHeight,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-        // Restore unified read+draw binding to whatever was current before.
-        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-    }
-
+    // The layers were composited straight into the back buffer (FBO 0), so
+    // just swap. Vk/XR backends issue the real present here.
     mWindow->swapBuffers();
 }
 
-void LLSwapChain::presentDirect()
+void LLSwapChain::bindForRead()
 {
-    llassert(mWindow != nullptr);
-    mWindow->swapBuffers();
+    // Read the default framebuffer (the on-screen frame) for readback.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+}
+
+void LLSwapChain::unbindRead()
+{
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, LLRenderTarget::sCurFBO);
+    glReadBuffer(LLRenderTarget::sCurFBO ? GL_COLOR_ATTACHMENT0 : GL_BACK);
 }
 
 void LLSwapChain::release()
@@ -157,10 +113,7 @@ void LLSwapChain::release()
     // flushes don't trip the assert.
     LLRenderTarget::sFlushRequiresParent = false;
 
-    // LLRenderTarget destructors release GL resources.
-    mImages.clear();
-    mWindow       = nullptr;
-    mWidth        = 0;
-    mHeight       = 0;
-    mCurrentIndex = 0;
+    mWindow = nullptr;
+    mWidth  = 0;
+    mHeight = 0;
 }

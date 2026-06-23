@@ -41,6 +41,8 @@
 #include "threadpool.h"
 #include "workqueue.h"
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_set>
 
@@ -60,7 +62,7 @@ namespace LLImageGLMemory
 }
 
 //============================================================================
-class LLImageGL : public LLRefCount, public LLGPUResource
+class LLImageGL : public LLThreadSafeRefCount, public LLGPUResource
 {
     friend class LLTexUnit;
 public:
@@ -117,12 +119,6 @@ protected:
     void analyzeAlpha(const void* data_in, U32 w, U32 h);
     void calcAlphaChannelOffsetAndStride();
 
-    // LLGPUResource hooks. Releasing a unique lease off-thread places a GL
-    // fence; the next acquire from a different thread waits on it.
-    // Same-thread acquires pay nothing.
-    void onUniqueRelease() override;
-    void onSharedAcquire() override;
-    void onUniqueAcquire() override;
 
 public:
     virtual void dump();    // debugging info to LL_INFOS()
@@ -182,6 +178,31 @@ public:
     // Returns a guard that holds a shared lease for the caller's scope.
     // See LLScopedTexName for usage.
     LLScopedTexName getTexName() const;
+
+    // Unguarded raw GL name - takes no lease. Only for callers that already
+    // hold a lease on this image (or guarantee single-thread access): the
+    // FBO-attach and in-place resize paths in LLRenderTarget read it under a
+    // held lease, where getTexName() would re-enter the same mutex.
+    LLGLuint getTexNameRaw() const;
+
+    // Cross-context GPU sync. Opt in (setNeedsCrossContextSync) for textures
+    // read from another GL context - the off-thread upload path and the
+    // compositor mailbox. Null otherwise, so single-context textures carry no
+    // sync state. frameComplete is placed by the producer and waited by the
+    // consumer; readComplete goes the other way, so a recycled buffer isn't
+    // overwritten while a read is still in flight.
+    void setNeedsCrossContextSync(bool b);
+    bool needsCrossContextSync() const { return (bool)mCrossSync; }
+    void placeFrameCompleteFence();
+    void waitFrameCompleteFence();
+    void placeReadCompleteFence();
+    void waitReadCompleteFence();
+
+    // Whether this image owns its GL name. False (default): ~LLImageGL deletes
+    // the name. True: the name is owned elsewhere (e.g. an LLRenderTarget color
+    // attachment we only wrap for cross-context fencing) and must not be freed
+    // here.
+    void setExternalTexture(bool b) { mExternalTexture = b; }
 
     bool getIsAlphaMask() const;
 
@@ -263,11 +284,17 @@ private:
     U16      mHeight;
     S8       mCurrentDiscardLevel;
 
-    // Fence from the last off-thread unique release; the next cross-thread
-    // acquire waits on it. Only the unique lock writes or deletes it -
-    // shared waiters just read.
-    GLsync       mPendingFence = nullptr;
-    std::atomic<std::thread::id> mPendingFenceThread;
+    // Cross-context GPU sync state, allocated only for textures that opt in
+    // (setNeedsCrossContextSync). Fences are shared_ptr<void> with glDeleteSync
+    // as the deleter, so a fence can't be freed under a waiter that still holds
+    // a reference. The mutex guards only the pointer swap, never a GL call.
+    struct CrossContextSync
+    {
+        std::mutex            fenceMutex;
+        std::shared_ptr<void> frameCompleteFence;
+        std::shared_ptr<void> readCompleteFence;
+    };
+    std::shared_ptr<CrossContextSync> mCrossSync;
 
     bool mAllowCompression;
 
@@ -291,7 +318,7 @@ protected:
     LLGLenum mFormatType;
     bool     mFormatSwapBytes;// if true, use glPixelStorei(GL_UNPACK_SWAP_BYTES, 1)
 
-    bool mExternalTexture;
+    bool mExternalTexture = false;
 
     // STATICS
 public:

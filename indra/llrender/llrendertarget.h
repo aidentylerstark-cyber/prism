@@ -62,8 +62,10 @@
 
 */
 
-// Inherits LLGPUResource: mutators take a unique lease internally, readers
-// a shared one. getTexture and getFBO are a bit different - see their docs.
+// Inherits LLGPUResource as dormant scaffolding but is opted out of leasing
+// (setLeaseEnabled(false) in the ctor): an RT is a context-local FBO wrapper
+// and synchronizes nothing itself. Cross-context sync lives on its color
+// attachment (an LLImageGL) - see getColorAttachmentImage().
 class LLRenderTarget : public LLGPUResource
 {
 public:
@@ -94,7 +96,7 @@ public:
 
     // Movable so std::vector<LLRenderTarget> can reallocate. Only safe to
     // move when no leases are held - see LLGPUResource.
-    LLRenderTarget(LLRenderTarget&&) noexcept = default;
+    LLRenderTarget(LLRenderTarget&&) noexcept;
     LLRenderTarget(const LLRenderTarget&)            = delete;
     LLRenderTarget& operator=(const LLRenderTarget&) = delete;
     LLRenderTarget& operator=(LLRenderTarget&&)      = delete;
@@ -183,16 +185,17 @@ public:
     void getViewport(S32* viewport);
 
     //get X resolution
-    U32 getWidth() const;
+    U32 getWidth() const { return mResX; }
 
     //get Y resolution
-    U32 getHeight() const;
+    U32 getHeight() const { return mResY; }
 
-    LLTexUnit::eTextureType getUsage() const;
+    LLTexUnit::eTextureType getUsage() const { return mUsage; }
 
-    // Returns a guard that owns a shared lease for the caller's scope. See
-    // LLScopedTexName for the safe / unsafe usage patterns.
-    LLScopedTexName getTexture(U32 attachment = 0) const;
+    // Raw GL texture name of a color attachment (0 = first). Only meaningful on
+    // the thread that owns this RT; for cross-context sampling go through
+    // getColorAttachmentImage()->getTexName() (which holds the image's lease).
+    U32 getTexture(U32 attachment = 0) const;
     U32 getNumTextures() const;
 
     U32 getDepth() const;
@@ -206,33 +209,18 @@ public:
     void bindTexture(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options = LLTexUnit::TFO_BILINEAR);
 
     // Cross-context GPU sync. Opt in for RTs that another GL context reads
-    // from; everything else carries no sync state at all.
-    void setNeedsCrossContextSync(bool b)
-    {
-        if (b && !mCrossSync)
-        {
-            mCrossSync = std::make_shared<CrossContextSync>();
-        }
-        else if (!b)
-        {
-            mCrossSync.reset();
-        }
-    }
-    bool needsCrossContextSync() const { return (bool)mCrossSync; }
+    // from: the color attachment image (mTex[0]) carries the lease + fence.
+    // Single-context RTs carry nothing. Call after allocate(), once the color
+    // attachment exists.
+    void setNeedsCrossContextSync(bool b);
+    bool needsCrossContextSync() const;
 
-    // The writer places this fence when it finishes a frame; the reader
-    // waits on it before sampling so it only sees complete pixels.
-    void placeFrameCompleteFence();
-
-    // Server-side wait on the writer's fence. No-op if there's no fence
-    // or sync is disabled.
-    void waitFrameCompleteFence();
-
-    // Reverse direction: the reader places this after sampling, and the
-    // writer waits on it before rendering into the RT again so the two
-    // don't race on the GPU.
-    void placeReadCompleteFence();
-    void waitReadCompleteFence();
+    // The cross-context color attachment, or null unless this RT opted in
+    // (setNeedsCrossContextSync). Callers drive the frame/read-complete fences
+    // on it directly (LLImageGL::placeFrameCompleteFence etc.). Null for a
+    // single-context RT even though every attachment is now an LLImageGL - the
+    // null result is the "no cross-context sync" contract callers rely on.
+    LLImageGL* getColorAttachmentImage() const;
 
     //flush rendering operations
     //must be called when rendering is complete
@@ -262,12 +250,21 @@ public:
 protected:
     U32 mResX;
     U32 mResY;
-    std::vector<U32> mTex;
+    // Color attachments as genuine LLImageGL objects (no raw GL handles): each
+    // owns its GL name (mExternalTexture=false) unless supplied by
+    // setColorAttachment (borrowed). mTex[0] is the cross-context primitive
+    // when opted in - it carries the lease + fence.
+    std::vector<LLPointer<LLImageGL>> mTex;
     std::vector<U32> mInternalFormat;
     U32 mFBO;
     LLRenderTarget* mPreviousRT = nullptr;
 
-    U32 mDepth;
+    // Owned depth attachment (null on a borrower - see mSharedDepth).
+    LLPointer<LLImageGL> mDepth;
+    // Depth borrowed from another RT via shareDepthBuffer: a non-owning
+    // reference that keeps the shared image alive for as long as we use it, so
+    // release order between owner and borrower can't dangle it.
+    LLPointer<LLImageGL> mSharedDepth;
     bool mUseDepth;
     LLTexUnit::eTextureMipGeneration mGenerateMipMaps;
     U32 mMipLevels;
@@ -286,31 +283,13 @@ protected:
     // part of the broader render-state cleanup for Vulkan port prep.
     bool mIsSwapChainImage = false;
 
-    // Cross-context GPU sync state. Only allocated for RTs that opt in -
-    // a null mCrossSync means no sync. frameComplete is placed by the
-    // producer and waited on by the compositor; readComplete goes the
-    // other way.
-    //
-    // Fences are shared_ptr<void> with glDeleteSync as the deleter, so a
-    // fence can't be deleted out from under a waiter that still holds a
-    // reference. The mutex only guards the pointer swap, never a GL call.
-    struct CrossContextSync
-    {
-        std::mutex            fenceMutex;
-        std::shared_ptr<void> frameCompleteFence;
-        std::shared_ptr<void> readCompleteFence;
-    };
-    std::shared_ptr<CrossContextSync> mCrossSync;
-
 private:
-    // The _locked helpers don't take a lease - the public wrappers own it.
-    // Internal callers use these to avoid re-entering the shared_mutex on
-    // the same thread.
-    void release_locked();
-    bool addColorAttachment_locked(U32 color_fmt);
-    void bindTarget_locked();
-    void flush_locked();
-    void bindTexture_locked(U32 index, S32 channel, LLTexUnit::eTextureFilterOptions filter_options);
+    // Allocate an owned LLImageGL attachment of (mResX, mResY) with the given
+    // formats and no source pixels, leaving it bound on tex unit 0 for the
+    // caller to set filtering/address and attach to the FBO. NPOT-safe: it
+    // never calls setSize (which enforces power-of-two) - mResX/mResY are the
+    // RT's authoritative size.
+    LLPointer<LLImageGL> createAttachmentImage(U32 internal_fmt, U32 primary_fmt, U32 type, bool use_mipmaps);
 };
 
 #endif

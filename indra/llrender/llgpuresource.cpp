@@ -54,7 +54,6 @@ LLSharedLease::LLSharedLease(LLGPUResource* res)
     if (mResource)
     {
         mResource->mLeaseMutex->lock_shared();
-        mResource->onSharedAcquire();
     }
 }
 
@@ -84,7 +83,6 @@ void LLSharedLease::release()
 {
     if (mResource)
     {
-        mResource->onSharedRelease();
         mResource->mLeaseMutex->unlock_shared();
         mResource = nullptr;
     }
@@ -98,7 +96,6 @@ LLUniqueLease::LLUniqueLease(LLGPUResource* res)
     if (mResource)
     {
         mResource->mLeaseMutex->lock();
-        mResource->onUniqueAcquire();
     }
 }
 
@@ -128,7 +125,6 @@ void LLUniqueLease::release()
 {
     if (mResource)
     {
-        mResource->onUniqueRelease();
         mResource->mLeaseMutex->unlock();
         mResource = nullptr;
     }

@@ -32,6 +32,12 @@
 #include "llwindowmacosx-objc.h"
 
 #include "lltimer.h"
+#include "llthreadsafequeue.h"
+
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <OpenGL/OpenGL.h>
@@ -133,9 +139,39 @@ public:
     void updateMouseDeltas(float* deltas);
     void getMouseDeltas(float* delta);
 
+    // Refresh mDisplay, mRefreshRate and mIsDynamicRefresh from the
+    // window's current display. Touches AppKit (NSScreen), so it must run
+    // on the OS main thread - called at context creation and on screen
+    // change.
+    void updateRefreshRate();
+
     void handleDragNDrop(std::string url, LLWindowCallbacks::DragNDropAction action);
 
     bool allowsLanguageInput() { return mLanguageTextInputAllowed; }
+
+    // Input deferral, mirroring LLWindowWin32. The OS main thread (which
+    // does window-thread duty on macOS) captures Cocoa events and posts
+    // the deep handlers here; gatherInput() drains them on the viewer
+    // thread, so input handlers run alongside render - never racing it.
+    // post() is for general events, postMouseButtonEvent() for mouse
+    // buttons (drained after the once-per-frame mouse move).
+    void post(const std::function<void()>& func);
+    void postMouseButtonEvent(const std::function<void()>& func);
+
+    // Record the latest cursor position (called on the OS main thread
+    // from the mouse-moved callback). gatherInput() emits one
+    // handleMouseMove per frame when it changes.
+    void setLatestMousePos(const LLCoordGL& pos);
+
+    // Run AppKit-only work (NSCursor, etc.) on the OS main thread. If
+    // we're already there it runs inline; otherwise it's queued and run
+    // by drainOSMainQueue(). The viewer thread reaches cursor calls via
+    // gatherInput, but AppKit must stay on the OS main thread.
+    void runOnOSMain(const std::function<void()>& func);
+
+    // Drain queued OS-main work. Called on the OS main thread (from the
+    // frame loop's OS-main segment).
+    void drainOSMainQueue() override;
 
     //create a new GL context that shares a namespace with this Window's main GL context and make it current on the current thread
     // returns a pointer to be handed back to destroySharedConext/makeContextCurrent
@@ -148,8 +184,13 @@ public:
 
     void toggleVSync(bool enable_vsync) override;
 
-    // enable or disable multithreaded GL
-    static void setUseMultGL(bool use_mult_gl);
+    // Swap every Nth vblank (1 = every vblank). Paces mContext, the
+    // context swapBuffers() flushes.
+    void setSwapInterval(S32 interval) override;
+
+    // True when the window's display runs a variable refresh rate
+    // (ProMotion). Maintained by updateRefreshRate().
+    bool isDynamicRefreshRate() override { return mIsDynamicRefresh; }
 
 protected:
     LLWindowMacOSX(LLWindowCallbacks* callbacks,
@@ -177,6 +218,18 @@ protected:
 
 private:
     void restoreGLContext();
+
+    // CVDisplayLink vsync: CGLFlushDrawable doesn't reliably block on
+    // vblank on macOS, so the present paces off a display-link tick.
+    void startDisplayLink();
+    void stopDisplayLink();
+    void waitForVBlanks(S32 interval); // OS main; blocks until interval ticks
+
+public:
+    // Called from the CVDisplayLink callback thread, once per vblank.
+    void onVBlank();
+
+private:
 
 protected:
     //
@@ -227,16 +280,38 @@ protected:
     bool        mMinimized;
     U32         mFSAASamples;
     bool        mForceRebuild;
+    bool        mIsDynamicRefresh = false;
 
     S32 mDragOverrideCursor;
 
     // Input method management through Text Service Manager.
-    bool        mLanguageTextInputAllowed;
+    // Atomic: read on the OS main thread (the keyDown: accepts-text
+    // proxy) while it may be written by viewer-thread UI focus changes.
+    std::atomic<bool> mLanguageTextInputAllowed;
     LLPreeditor*    mPreeditor;
 
-public:
-    static bool sUseMultGL;
+    // Deferred-input queues + once-per-frame mouse-move state. Cocoa
+    // callbacks push on the OS main thread; gatherInput() drains on the
+    // viewer thread. See post()/postMouseButtonEvent().
+    LLThreadSafeQueue<std::function<void()>> mFunctionQueue;
+    LLThreadSafeQueue<std::function<void()>> mMouseQueue;
+    // Latest cursor position; written only on the OS (window) thread,
+    // readable from anywhere. mLastMousePos is viewer-thread-only.
+    LLCoordGL   mMousePos;
+    LLCoordGL   mLastMousePos;
 
+    // AppKit work marshaled back to the OS main thread (see runOnOSMain).
+    LLThreadSafeQueue<std::function<void()>> mOSMainQueue;
+
+    // CVDisplayLink vsync pacing (see startDisplayLink/waitForVBlanks).
+    void*                   mDisplayLink = nullptr; // CVDisplayLinkRef
+    std::mutex              mVBlankMutex;
+    std::condition_variable mVBlankCond;
+    U64                     mVBlankCount = 0;     // ticked on the CVDisplayLink thread
+    U64                     mLastSwapVBlank = 0;  // OS-main only
+    std::atomic<S32>        mSwapInterval{1};     // present every Nth vblank; 0 = unthrottled
+
+public:
     friend class LLWindowManager;
 
 };

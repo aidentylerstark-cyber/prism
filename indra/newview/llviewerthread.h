@@ -37,17 +37,19 @@ class LLWindow;
 // OS main thread keeps the message pump and the compositor.
 //
 // Construct and start() this on the OS main thread once the window's
-// context is up. On shutdown, unblock the compositor first, then
-// requestStop() and join via shutdown().
+// context is up. On shutdown, call LLCompositor::requestShutdown() first
+// to unblock any producer waiting on a present, then requestStop() and
+// join via shutdown().
 class LLViewerThread : public LLThread
 {
 public:
     LLViewerThread(LLWindow* window);
     ~LLViewerThread() override;
 
-    // Flag the thread for shutdown. If we're blocked waiting on a
-    // present, call LLCompositor::requestShutdown() first to unstick
-    // us, then join via shutdown().
+    // Flag the thread for shutdown. The loop checks isQuitting() between
+    // ticks. If the tick may be parked waiting on a present, call
+    // LLCompositor::requestShutdown() first to unstick it, then join via
+    // shutdown().
     void requestStop() { setQuitting(); }
 
 protected:

@@ -441,8 +441,7 @@ bool LLTexUnit::bind(LLRenderTarget* renderTarget, bool bindDepth)
     }
     else
     {
-        auto guard = renderTarget->getTexture();
-        bindManual(renderTarget->getUsage(), guard.get());
+        bindManual(renderTarget->getUsage(), renderTarget->getTexture());
     }
 
     return true;

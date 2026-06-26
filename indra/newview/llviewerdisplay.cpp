@@ -728,16 +728,18 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
     // Bind our back buffer as the bottom of the render target stack for
     // this frame. Everything downstream renders on top of it and pops
-    // back to it on flush. Snapshots render to their own off-screen
-    // target, so we skip the bind in that case. Nothing should still be
-    // bound from a previous frame at this point - hence the assert.
-    if (!for_snapshot)
+    // back to it on flush. Deferred snapshots reuse this same path (the
+    // sky needs it - see the for_snapshot reset above), but rawSnapshot
+    // binds its own oversized scratch target first; if something is
+    // already bound, leave it. A still-bound target on a true world frame
+    // means an upstream flush was missed - hence the assert.
+    if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
     {
-        llassert(LLRenderTarget::getCurrentBoundTarget() == nullptr);
-        if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
-        {
-            LLAppViewer::instance()->getBackBuffer().bindTarget();
-        }
+        LLAppViewer::instance()->getBackBuffer().bindTarget();
+    }
+    else
+    {
+        llassert(gSnapshot);
     }
 
     // do render-to-texture stuff here
@@ -1602,22 +1604,30 @@ void swap()
     LLPerfStats::RecordSceneTime T ( LLPerfStats::StatType_t::RENDER_SWAP );
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Swap");
 
-    // Flush the back buffer off the RT stack and mark a fresh frame
-    // ready. The actual present happens later in doFrame.
+    // Flush the bottom-of-stack target off the RT stack. For a world frame
+    // that's our back buffer, and we mark a fresh frame ready (the actual
+    // present happens later in doFrame). An oversized snapshot is instead
+    // sitting on its own scratch target here - leave it bound so rawSnapshot
+    // can read it back, and never publish it to the screen.
     LLRenderTarget& world_rt = LLAppViewer::instance()->getBackBuffer();
-
-    // By the time we get here, display() should have left our back
-    // buffer at the bottom of the stack. If not, something upstream
-    // didn't pop its render targets.
-    llassert(LLRenderTarget::getCurrentBoundTarget() == &world_rt);
 
     if (LLRenderTarget::getCurrentBoundTarget() == &world_rt)
     {
         world_rt.flush();
+        // Only publish once per frame, at the end of renderViewerFrame, and
+        // only for real world frames - snapshots reading the back buffer
+        // must not publish themselves.
+        if (!gSnapshot)
+        {
+            LLAppViewer::instance()->setBackBufferRendered();
+        }
     }
-    // Just set the flag here - we only publish once per frame, at the
-    // end of renderViewerFrame. Publishing twice gets us stale frames.
-    LLAppViewer::instance()->setBackBufferRendered();
+    else
+    {
+        // A snapshot's scratch target is the bottom of the stack here.
+        // Outside a snapshot this means an upstream flush was missed.
+        llassert(gSnapshot);
+    }
 }
 
 void renderCoordinateAxes()

@@ -1248,30 +1248,38 @@ void LLAppViewer::renderViewerFrame()
 
     display();
 
+    // The world render is done. The post-display updaters below are
+    // standalone renders (reflection probes, snapshot floaters), not the
+    // world pass - a parentless flush in them is legitimate, so drop the
+    // requirement now rather than at the end of the frame.
+    LLRenderTarget::sFlushRequiresParent = false;
+
     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
     pingMainloopTimeout("Main:Snapshot");
 
-    // The updaters need a parent on the RT stack to pop back to, but it
-    // can't be the back buffer - cubeSnapshot clears whatever's bound,
-    // which would wipe the frame we just rendered. Give them the scratch
-    // parent instead.
+    // Reflection probes' cubeSnapshot does a raw clear on whatever RT is
+    // bound, which would wipe the frame we just rendered - give it the
+    // scratch parent to land on, then flush back to a clean stack.
     bool scratch_bound = false;
     if (LLRenderTarget::getCurrentBoundTarget() == nullptr)
     {
         mScratchParent.bindTarget();
         scratch_bound = true;
     }
-
     gPipeline.mReflectionMapManager.update();
-    LLFloaterSnapshot::update();
-    LLFloaterSimpleSnapshot::update();
-
     if (scratch_bound &&
         LLRenderTarget::getCurrentBoundTarget() == &mScratchParent)
     {
         mScratchParent.flush();
     }
+
+    // The snapshot floaters run their own full render (rawSnapshot, with
+    // its own render target). Let them run from a clean RT stack, exactly
+    // as they do when driven from idle() - binding a parent under them
+    // leaves the stack dirty for next frame's display().
+    LLFloaterSnapshot::update();
+    LLFloaterSimpleSnapshot::update();
 
     llassert(LLRenderTarget::getCurrentBoundTarget() == nullptr);
 
@@ -1283,10 +1291,6 @@ void LLAppViewer::renderViewerFrame()
         markFrameRendered();
     }
     gDisplaySwapBuffers = true;
-
-    // Back out of the world-render scope; standalone passes that run
-    // before the next renderViewerFrame may flush parentless.
-    LLRenderTarget::sFlushRequiresParent = false;
 }
 
 class LLUITranslationBridge : public LLTranslationBridge

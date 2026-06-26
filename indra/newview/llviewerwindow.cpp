@@ -5362,9 +5362,18 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
                     swap();
                 }
 
-                // The rendered frame lives in our back buffer, not
-                // FBO 0, so read from there.
-                LLAppViewer::instance()->getBackBuffer().bindForRead();
+                // Read back the frame we just rendered. Oversized captures
+                // render into their own scratch target; everything else
+                // lands in the back buffer (FBO 0 is not a valid target on
+                // the render thread's offscreen context).
+                if (reset_deferred)
+                {
+                    scratch_space.bindForRead();
+                }
+                else
+                {
+                    LLAppViewer::instance()->getBackBuffer().bindForRead();
+                }
 
                 for (U32 out_y = 0; out_y < read_height ; out_y++)
                 {

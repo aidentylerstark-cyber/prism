@@ -88,7 +88,21 @@ void LLTestSquareCompositable::run()
     mWindow->makeContextCurrent(mContext);
     gGL.init(false);
 
-    mRT.allocate(mSize, mSize, GL_RGBA, /*depth=*/false);
+    // An optional dev-only layer must never take the viewer down. If the RT
+    // can't be created on this producer context (a known issue: glGenTextures
+    // can come back empty on a freshly-current shared context early in
+    // startup), bail cleanly - we never setReady(), so the compositor skips
+    // us, and the rest of the viewer runs.
+    if (!mRT.allocate(mSize, mSize, GL_RGBA, /*depth=*/false))
+    {
+        LL_WARNS() << "TestSquare '" << mName
+                   << "': RT allocate failed on producer context; layer disabled." << LL_ENDL;
+        gGL.shutdown();
+        mWindow->destroySharedContext(mContext);
+        mContext = nullptr;
+        mRunExited.store(true, std::memory_order_release);
+        return;
+    }
     mRT.setNeedsCrossContextSync(true);
 
     // First frame so the layer shows up before the first tick.

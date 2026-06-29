@@ -1986,7 +1986,21 @@ void* LLWindowWin32::createSharedContext()
 
 void LLWindowWin32::makeContextCurrent(void* contextPtr)
 {
-    wglMakeCurrent(mhDC, (HGLRC) contextPtr);
+    // TEMP ctxdiag: confirm whether wglMakeCurrent actually succeeds per
+    // thread. All contexts share the single mhDC; an HDC can only be current
+    // on one thread at a time, so concurrent producers may be failing here
+    // silently (no current context -> glGenTextures no-ops).
+    BOOL ok = wglMakeCurrent(mhDC, (HGLRC) contextPtr);
+    DWORD err = ok ? 0 : GetLastError();
+    HGLRC after = wglGetCurrentContext();
+    HDC   afterdc = wglGetCurrentDC();
+    LL_INFOS("ctxdiag") << "makeContextCurrent thread=" << LLThread::currentID()
+                        << " req_rc=" << contextPtr
+                        << " mhDC=" << (void*)mhDC
+                        << " ok=" << (S32)ok
+                        << " GetLastError=" << (U32)err
+                        << " cur_rc=" << (void*)after
+                        << " cur_dc=" << (void*)afterdc << LL_ENDL;
     LL_PROFILER_GPU_CONTEXT;
 }
 

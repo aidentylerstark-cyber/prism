@@ -50,6 +50,14 @@ public:
     // lease - the compositor handles that.
     virtual LLRenderTarget& frontBuffer() = 0;
 
+    // True once the producer's front buffer is allocated and safe to sample,
+    // false before the producer tears it down. The compositor MUST skip a
+    // layer whose isReady() is false: it may still be mid-allocation on its
+    // producer thread, or already releasing its RT. Reading frontBuffer() in
+    // either window touches an LLRenderTarget whose mTex vector is being
+    // mutated on another thread.
+    bool isReady() const { return mReady.load(std::memory_order_acquire); }
+
     // Destination offset (pixels, GL origin = bottom-left) where this
     // layer's front buffer lands in the swap chain image. Fullscreen
     // layers keep the 0,0 default.
@@ -68,6 +76,11 @@ public:
     F32 lastFrameMs() const { return mFrameMs.load(std::memory_order_relaxed); }
 
 protected:
+    // Producers flip this true once their front buffer is allocated and
+    // first-painted, and false before they release it. Paired with the
+    // acquire load in isReady() so the compositor sees a fully-built RT.
+    void setReady(bool ready) { mReady.store(ready, std::memory_order_release); }
+
     // Producers call this when a frame is complete - stamps the cycle
     // metrics.
     void produceFrame()
@@ -82,6 +95,7 @@ protected:
     }
 
 private:
+    std::atomic<bool> mReady{false};
     std::atomic<F32> mFrameMs{0.f};
     F64              mLastProduceTime = 0.0;
 };

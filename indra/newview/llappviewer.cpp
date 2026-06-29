@@ -782,6 +782,9 @@ void LLAppViewer::allocateRenderTargets(U32 width, U32 height)
     // cubeSnapshot's raw glClear to land each frame.
     mScratchParent.allocate(width, height, GL_RGBA, /*depth=*/true);
     mScratchParent.markAsSwapChainImage(true);
+
+    // Front buffer exists now: the compositor may sample the world layer.
+    setReady(true);
 }
 
 void LLAppViewer::resizeRenderTargets(U32 width, U32 height)

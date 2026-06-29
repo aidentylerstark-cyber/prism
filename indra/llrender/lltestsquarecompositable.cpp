@@ -70,7 +70,13 @@ void LLTestSquareCompositable::disconnect()
     {
         setQuitting();
         if (mCompositor) mCompositor->wakeSyncWaiters(); // break our waitForPresent
-        shutdown(); // joins
+        shutdown(); // waits for run() to return (polls a non-atomic flag)
+
+        // shutdown()'s mStatus poll has no memory barrier (llthread.cpp:243),
+        // and run() stores mRunExited (release) just before mStatus goes
+        // STOPPED. Acquire-load it once so run()'s final writes - the RT
+        // release - are guaranteed visible before the object can be freed.
+        (void)mRunExited.load(std::memory_order_acquire);
     }
 }
 
@@ -96,6 +102,9 @@ void LLTestSquareCompositable::run()
         glFlush();
     }
     produceFrame();
+
+    // RT is allocated and first-painted: the compositor may sample us now.
+    setReady(true);
 
     while (!isQuitting())
     {
@@ -134,12 +143,21 @@ void LLTestSquareCompositable::run()
         }
     }
 
+    // Stop the compositor from sampling us before we drop the RT. (Teardown
+    // runs on the compositor's thread, which is blocked in disconnect() here,
+    // so it can't be mid-present - but the flag keeps that guarantee local.)
+    setReady(false);
+
     // Tear down on this thread - the context has to be destroyed where
     // it's current.
     mRT.release();
     gGL.shutdown();
     mWindow->destroySharedContext(mContext);
     mContext = nullptr;
+
+    // Last thing we touch: publishes all of run()'s memory effects (the RT
+    // release above) to whoever joins us in disconnect().
+    mRunExited.store(true, std::memory_order_release);
 }
 
 void LLTestSquareCompositable::paint()

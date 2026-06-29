@@ -203,12 +203,30 @@ void LLCompositor::presentFrame()
         mBlitShader->bind();
     }
 
-    for (LLCompositable* c : mCompositables)
+    // Snapshot the layer list under its lock so a concurrent add/remove can't
+    // invalidate our iterator mid-present. We drop the lock before touching
+    // any layer - the readiness gate below covers per-layer lifetime.
+    std::vector<LLCompositable*> layers;
+    {
+        std::lock_guard<std::mutex> lock(mCompositablesMutex);
+        layers = mCompositables;
+    }
+
+    for (LLCompositable* c : layers)
     {
         if (!shader_ready)
         {
             break;
         }
+
+        // The producer must have finished allocating its front buffer and not
+        // be tearing it down: otherwise frontBuffer()'s RT is mid-mutation on
+        // the producer thread and its mTex is unsafe to read.
+        if (!c->isReady())
+        {
+            continue;
+        }
+
         // Mailbox claim for queue-paced layers.
         c->tryAcquireNewFront();
 

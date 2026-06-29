@@ -90,6 +90,13 @@ private:
 
     LLCompositor* mCompositor = nullptr; // present clock (waitForPresent)
     U64           mLastTick = 0;         // last present index we paced to
+
+    // Set true (release) as the very last thing run() does, after the RT is
+    // released and the context destroyed. disconnect() waits on it (acquire)
+    // so the object is never freed while run() is still touching our members.
+    // LLThread::shutdown() polls a non-atomic mStatus with no barrier (see the
+    // note at llthread.cpp:243); this is the missing happens-before.
+    std::atomic<bool> mRunExited{false};
 };
 
 #endif // LL_LLTESTSQUARECOMPOSITABLE_H

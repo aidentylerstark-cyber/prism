@@ -31,6 +31,7 @@
 #include "lluuid.h"
 #include "llhandle.h"
 #include "lltimer.h"
+#include "lleventtimer.h"
 
 #include <memory>
 #include <string>
@@ -145,6 +146,7 @@ private:
 class LLScriptEditorWSServer : public LLJSONRPCServer
 {
 public:
+    static constexpr U32 ALL_CONNECTIONS = 0xFFFFFFFF;
     enum SubscriptionError_t
     {
         SUBSCRIPTION_SUCCESS = 0,
@@ -191,12 +193,15 @@ public:
     std::set<std::string> getActiveScripts() const;
 
     // --- Object Content Publishing ---
-    bool publishObject(const LLUUID& object_id, U32 connection_id);
+    bool publishObject(const LLUUID& object_id);
     void unpublishObject(const LLUUID& object_id, const std::string& reason = "");
     bool isObjectPublished(const LLUUID& object_id) const;
     void unpublishConnection(U32 connection_id);
     void onPrimInventoryReady(const LLUUID& object_id, const LLUUID& prim_id);
     void onPrimInventoryChanged(const LLUUID& object_id, const LLUUID& prim_id);
+    void onObjectPropertyChanged(const LLUUID& prim_id, const std::string& name, const std::string& desc);
+    void onLinksetChildAdded(const LLUUID& root_id, LLViewerObject* child);
+    void onLinksetChildRemoved(const LLUUID& root_id, const LLUUID& child_id);
 
 protected:
     LLWebsocketMgr::WSConnection::ptr_t connectionFactory(LLWebsocketMgr::WSServer::ptr_t server,
@@ -220,6 +225,7 @@ protected:
     LLSD saveNotecard(LLViewerObject* prim, LLInventoryItem* item, const std::string& content);
     LLSD handleObjectItemDelete(U32 connection_id, const LLSD& params);
     LLSD handleObjectItemCreate(const std::string& method, const LLSD& id, const LLSD& params);
+    LLSD handleObjectUnpublish(U32 connection_id, const LLSD& params);
 
     struct ValidatedItem
     {
@@ -231,10 +237,14 @@ protected:
     ValidatedItem validatePublishedItem(const LLSD& params, U32 permMask) const;
 
     // --- Object Content Publishing (helpers) ---
+    static std::string getPrimName(LLViewerObject* obj);
     LLSD buildPrimInventoryLLSD(LLViewerObject* object) const;
     void notifyConnection(U32 connection_id, const std::string& method, const LLSD& params) const;
+    void notifyAll(const std::string& method, const LLSD& params) const;
     void cleanupPrimListeners(const LLUUID& object_id);
     void buildAndSendPublish(const LLUUID& object_id);
+    void scheduleLinksetFlush(const LLUUID& root_id, F32 delay);
+    void flushLinksetUpdate(const LLUUID& root_id);
     static LLSD errorResponse(const std::string& message);
 
 private:
@@ -270,8 +280,6 @@ private:
         std::string                                         mObjectName;
         std::string                                         mObjectDescription;
         std::string                                         mRegionName;
-        U32                                                 mConnectionID;  // owning WS connection
-        LLScriptEditorWSConnection::wptr_t                  mConnection;
         std::vector<PublishedPrimInfo>                       mPrims;         // root + all children
         std::vector<std::unique_ptr<LLPublishedPrimListener>> mListeners;
     };
@@ -279,7 +287,6 @@ private:
     struct PendingPublish
     {
         LLUUID                                              mObjectID;
-        U32                                                 mConnectionID;
         std::set<LLUUID>                                    mPendingPrims;  // prims whose inventory we're still waiting for
         std::vector<std::unique_ptr<LLPublishedPrimListener>> mListeners;   // listeners for pending prims
     };
@@ -293,6 +300,8 @@ private:
     std::map<LLUUID, PublishedObjectInfo> mPublishedObjects;  // keyed by root object_id
     std::map<LLUUID, PendingPublish>      mPendingPublishes;  // keyed by root object_id
     std::map<LLUUID, std::string>         mPendingItemCreates; // prim_id -> pump name awaiting inventory update
+    std::map<LLUUID, std::set<LLUUID>>             mNewChildPrims;      // root_id → children awaiting first inventory response
+    std::map<LLUUID, std::weak_ptr<LLEventTimer>>   mLinksetFlushTimers; // root_id → pending coalesce timer
 
     boost::signals2::connection mLanguageChangeSignal;
     LLUUID mLastSyntaxId;

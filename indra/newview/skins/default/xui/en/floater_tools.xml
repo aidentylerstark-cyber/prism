@@ -3058,30 +3058,42 @@ even though the user gets a free copy.
          name="Contents"
          top_delta="0"
          width="295">
-            <button
+            <flyout_button
              follows="left|top"
              height="23"
              label="New Script"
-             label_selected="New Script"
              layout="topleft"
-             left="8"
+             left="7"
              name="button new script"
              top="10"
-             width="134"
-             font="DejaVu"
-             font.size="LSmall"
-             pad_bottom="1" />
+             width="89">
+                <flyout_button.item
+                 label="New LSL Script"
+                 name="new_lsl_script"
+                 value="lsl" />
+                <flyout_button.item
+                 label="New Lua Script"
+                 name="new_lua_script"
+                 value="lua" />
+            </flyout_button>
             <button
              follows="left|top"
              height="23"
              label="Permissions"
              layout="topleft"
-             left_pad="8"
+             left_pad="7"
              name="button permissions"
-             width="134"
-             font="DejaVu"
-             font.size="LSmall"
-             pad_bottom="1" />
+             width="134" />
+            <button
+             follows="left|top"
+             height="23"
+             is_toggle="true"
+             label="Publish"
+             label_selected="Unpublish"
+             layout="topleft"
+             left_pad="7"
+             name="button publish"
+             width="134" />
             <filter_editor
              follows="left|top|right"
              label="Enter filter text"

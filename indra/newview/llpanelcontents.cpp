@@ -31,6 +31,7 @@
 
 // linden library includes
 #include "llerror.h"
+#include "llcombobox.h"
 #include "llfiltereditor.h"
 #include "llfloaterreg.h"
 #include "llfontgl.h"
@@ -55,6 +56,7 @@
 #include "lltrans.h"
 #include "llviewerassettype.h"
 #include "llviewerinventory.h"
+#include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
@@ -82,8 +84,11 @@ bool LLPanelContents::postBuild()
 {
     setMouseOpaque(false);
 
-    childSetAction("button new script",&LLPanelContents::onClickNewScript, this);
+    getChild<LLUICtrl>("button new script")->setCommitCallback(boost::bind(&LLPanelContents::onNewScriptFlyoutCommit, this, _1));
     childSetAction("button permissions",&LLPanelContents::onClickPermissions, this);
+
+    mPublishButton = getChild<LLButton>("button publish");
+    mPublishButton->setClickedCallback([this](LLUICtrl*, const LLSD&) { onClickPublish(); });
 
     mFilterEditor = getChild<LLFilterEditor>("contents_filter");
     mFilterEditor->setCommitCallback([&](LLUICtrl*, const LLSD&) { onFilterEdit(); });
@@ -114,6 +119,8 @@ void LLPanelContents::getState(LLViewerObject *objectp )
     if( !objectp )
     {
         getChildView("button new script")->setEnabled(false);
+        mPublishButton->setEnabled(false);
+        mPublishButton->setToggleState(false);
         return;
     }
 
@@ -133,8 +140,35 @@ void LLPanelContents::getState(LLViewerObject *objectp )
         ((LLSelectMgr::getInstance()->getSelection()->getRootObjectCount() == 1)
             || (LLSelectMgr::getInstance()->getSelection()->getObjectCount() == 1)));
 
+    // Enable the Lua script option only when the region supports it.
+    bool lua_region = false;
+    LLViewerRegion* region = objectp->getRegion();
+    if (region && region->simulatorFeaturesReceived())
+    {
+        LLSD simulatorFeatures;
+        region->getSimulatorFeatures(simulatorFeatures);
+        lua_region = simulatorFeatures["LuaScriptsEnabled"].asBoolean();
+    }
+    getChild<LLComboBox>("button new script")->setEnabledByValue("lua", lua_region);
+
     getChildView("button permissions")->setEnabled(!objectp->isPermanentEnforced());
     mPanelInventoryObject->setEnabled(!objectp->isPermanentEnforced());
+
+    // Publish button - enabled only when WS server is configured, and a single editable root object is selected.
+    bool ws_enabled = gSavedSettings.getBOOL("ExternalWebsocketSyncEnable");
+    bool single_root = (LLSelectMgr::getInstance()->getSelection()->getRootObjectCount() == 1);
+    mPublishButton->setEnabled(ws_enabled && editable && all_volume && single_root);
+
+    // Sync toggle state to reflect whether the object is currently published.
+    if (ws_enabled)
+    {
+        auto server = LLScriptEditorWSServer::getServer();
+        mPublishButton->setToggleState(server && server->isObjectPublished(objectp->getID()));
+    }
+    else
+    {
+        mPublishButton->setToggleState(false);
+    }
 }
 
 void LLPanelContents::onFilterEdit()
@@ -221,8 +255,7 @@ void LLPanelContents::clearContents()
 // Static functions
 //
 
-// static
-void LLPanelContents::onClickNewScript(void *userdata)
+void LLPanelContents::onNewScriptFlyoutCommit(LLUICtrl* ctrl)
 {
     const bool children_ok = true;
     LLViewerObject* object = LLSelectMgr::getInstance()->getSelection()->getFirstRootObject(children_ok);
@@ -241,20 +274,34 @@ void LLPanelContents::onClickNewScript(void *userdata)
         std::string desc;
         LLViewerAssetType::generateDescriptionFor(LLAssetType::AT_LSL_TEXT, desc);
 
-        U8 script_language = SST_LSL;
-        LLUUID template_id;
-
-        LLViewerRegion* region = object->getRegion();
-        if (region && region->simulatorFeaturesReceived())
+        U8 script_language;
+        const std::string value = ctrl->getValue().asString();
+        if (value == "lsl")
         {
-            LLSD simulatorFeatures;
-            region->getSimulatorFeatures(simulatorFeatures);
-            if (simulatorFeatures["LuaScriptsEnabled"].asBoolean())
+            script_language = SST_LSL;
+        }
+        else if (value == "lua")
+        {
+            script_language = SST_LUA;
+        }
+        else
+        {
+            // Action button clicked without a selection — auto-detect from region.
+            script_language = SST_LSL;
+            LLViewerRegion* region = object->getRegion();
+            if (region && region->simulatorFeaturesReceived())
             {
-                script_language = SST_LUA;
+                LLSD simulatorFeatures;
+                region->getSimulatorFeatures(simulatorFeatures);
+                if (simulatorFeatures["LuaScriptsEnabled"].asBoolean())
+                {
+                    script_language = SST_LUA;
+                }
             }
         }
-        // *TODO* Get a template ID and script_language based on user preferences.  Template ID is the inventory item UUID of a script
+
+        LLUUID template_id;
+        // *TODO* Get a template ID based on user preferences.  Template ID is the inventory item UUID of a script
         // in the user's inventory that is used as a template for new scripts.
 
         LLPointer<LLViewerInventoryItem> new_item =
@@ -272,8 +319,6 @@ void LLPanelContents::onClickNewScript(void *userdata)
                 time_corrected());
         object->saveScript(new_item, true, true, template_id);
 
-        std::string name = new_item->getName();
-
         // *NOTE: In order to resolve SL-22177, we needed to create
         // the script first, and then you have to click it in
         // inventory to edit it.
@@ -288,4 +333,41 @@ void LLPanelContents::onClickPermissions(void *userdata)
 {
     LLPanelContents* self = (LLPanelContents*)userdata;
     gFloaterView->getParentFloater(self)->addDependentFloater(LLFloaterReg::showInstance("bulk_perms"));
+}
+
+void LLPanelContents::onClickPublish()
+{
+    const bool children_ok = true;
+    LLViewerObject* object = LLSelectMgr::getInstance()->getSelection()->getFirstRootObject(children_ok);
+    if (!object)
+    {
+        LL_WARNS() << "No root object selected for publish/unpublish" << LL_ENDL;
+        return;
+    }
+
+    auto server = LLScriptEditorWSServer::ensureServerRunning();
+    if (!server)
+    {
+        LL_WARNS() << "Cannot publish/unpublish: WebSocket server failed to start" << LL_ENDL;
+        return;
+    }
+
+    const LLUUID object_id = object->getID();
+    if (server->getConnectionCount())
+    { // if we already have at least one connection, then we can toggle the publish state of the object
+        if (server->isObjectPublished(object_id))
+        {
+            server->unpublishObject(object_id, "user");
+        }
+        else
+        {
+            server->publishObject(object_id);
+        }
+    }
+    else
+    {   // if we don't have any connections, we need to build the url and launch vscode
+        // Launch VSCode
+        LLScriptEditorWSServer::launchVSCode(object_id);
+
+    }
 }

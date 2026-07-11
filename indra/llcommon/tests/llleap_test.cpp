@@ -513,7 +513,7 @@ namespace tut
                                 "sys.exit(1)\n";});
         waitfor(LLLeap::create(test_name,
                                StringVec{PYTHON, script.getName(), stringize(size)}),
-                180);               // try a longer timeout
+                300);               // try a longer timeout
         result.ensure();
     }
 

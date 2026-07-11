@@ -1199,7 +1199,7 @@ class Darwin_x86_64_Manifest(ViewerManifest):
             # must itself be a symlink to some specific Versions subdir.
             tarpath = os.path.join(RUNNER_TEMP, "viewer.tar.xz")
             print(f'Creating {tarpath} from {self.get_dst_prefix()}')
-            with tarfile.open(tarpath, mode="w:xz") as tarball:
+            with tarfile.open(tarpath, mode="w:xz", preset=0) as tarball:
                 # Store in the tarball as just 'Second Life Mumble.app'
                 # instead of 'Users/someone/.../newview/Release/Second...'
                 # It's at this point that we rename 'Second Life Release.app'

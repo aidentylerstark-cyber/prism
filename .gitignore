@@ -91,3 +91,6 @@ web/secondlife.com.*
 
 .env
 .vscode
+
+# Prism: local Claude Code tooling (do not publish to TPV repo)
+.claude/

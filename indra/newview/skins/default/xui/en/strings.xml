@@ -352,6 +352,18 @@ are allowed.
   <!-- Avatar name: More than one avatar is selected/used here -->
   <string name="AvatarNameMultiple">(multiple)</string>
 
+  <!-- Radar (ported from Firestorm) -->
+  <string name="camera_no_focus">The camera cannot focus user [AVATARNAME] because they are outside your draw distance.</string>
+  <string name="entering_draw_distance">entered draw distance ([DISTANCE] m).</string>
+  <string name="leaving_draw_distance">left draw distance.</string>
+  <string name="entering_chat_range">entered chat range ([DISTANCE] m).</string>
+  <string name="leaving_chat_range">left chat range.</string>
+  <string name="entering_region">entered the region.</string>
+  <string name="entering_region_distance">entered the region ([DISTANCE] m).</string>
+  <string name="leaving_region">left the region.</string>
+  <string name="avatar_age_alert">triggered the age alert. Age: [AGE] day(s)</string>
+  <string name="avatar_age_not_available">n.a.</string>
+
 	<!-- Group name: text shown for LLUUID::null -->
 	<string name="GroupNameNone">(none)</string>
 
@@ -4219,6 +4231,7 @@ name="Command_360_Capture_Label">360 snapshot</string>
   <string name="Command_Places_Label">Places</string>
   <string name="Command_Preferences_Label">Preferences</string>
   <string name="Command_Profile_Label">Profile</string>
+  <string name="Command_Radar_Label">Radar</string>
   <string name="Command_Report_Abuse_Label">Report Abuse</string>
   <string name="Command_Search_Label">Search</string>
   <string name="Command_Snapshot_Label">Snapshot</string>
@@ -4252,6 +4265,7 @@ name="Command_360_Capture_Tooltip">Capture a 360 equirectangular image</string>
   <string name="Command_Places_Tooltip">Places you've saved</string>
   <string name="Command_Preferences_Tooltip">Preferences</string>
   <string name="Command_Profile_Tooltip">Edit or view your profile</string>
+  <string name="Command_Radar_Tooltip">Opens the radar for nearby avatars</string>
   <string name="Command_Report_Abuse_Tooltip">Report Abuse</string>
   <string name="Command_Search_Tooltip">Find places, events, people</string>
   <string name="Command_Snapshot_Tooltip">Take a picture</string>

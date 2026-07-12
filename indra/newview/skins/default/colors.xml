@@ -159,6 +159,20 @@
     <color
      name="AlertCautionTextColor"
      reference="LtYellow" />
+    <!-- Radar (ported from Firestorm; AccentColor/SL-Silver mapped to
+         EmphasisColor/LtGray, which the base skin ships) -->
+    <color
+     name="AvatarListItemAgeAlert"
+     reference="Red" />
+    <color
+     name="AvatarListItemBeyondShoutRange"
+     reference="LtGray" />
+    <color
+     name="AvatarListItemChatRange"
+     reference="EmphasisColor" />
+    <color
+     name="AvatarListItemShoutRange"
+     reference="White" />
     <color
      name="AvatarListItemIconDefaultColor"
      reference="White" />

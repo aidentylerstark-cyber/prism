@@ -80,6 +80,14 @@ if (HAVOK)
 endif ()
 
 set(viewer_SOURCE_FILES
+    fscommon.cpp
+    fsfloaterradar.cpp
+    fspanelradar.cpp
+    fsradar.cpp
+    fsradarentry.cpp
+    fsradarlistctrl.cpp
+    fsradarmenu.cpp
+    fsscrolllistctrl.cpp
     gltfscenemanager.cpp
     gltf/asset.cpp
     gltf/accessor.cpp
@@ -758,6 +766,15 @@ set(VIEWER_BINARY_NAME "secondlife-bin" CACHE STRING
 set(viewer_HEADER_FILES
     CMakeLists.txt
     ViewerInstall.cmake
+    fscommon.h
+    fsfloaterradar.h
+    fspanelradar.h
+    fsradar.h
+    fsradarentry.h
+    fsradarlistctrl.h
+    fsradarmenu.h
+    fsscrolllistctrl.h
+    rlvshim.h
     gltfscenemanager.h
     groupchatlistener.h
     gltf/asset.h

@@ -936,4 +936,17 @@ with the same filename but different name
   <texture name="Icon_Color_Palette" file_name="icons/Icon_Color_Palette.png" preload="false"/>
   <texture name="Icon_Font_Size" file_name="icons/Icon_Font_Size.png" preload="false"/>
   <texture name="Icon_Pointer" file_name="icons/Icon_Pointer.png" preload="false"/>
+
+  <!-- Radar (ported from Firestorm) -->
+  <texture name="radar" file_name="toolbar_icons/radar.png" preload="true" />
+  <texture name="avatar_in_region" file_name="icons/green_square.png" preload="false" />
+  <texture name="avatar_on_parcel" file_name="icons/green_yellow_square.png" preload="false" />
+  <texture name="radarbox_n" file_name="icons/radar_n.png" preload="false" />
+  <texture name="radarbox_s" file_name="icons/radar_s.png" preload="false" />
+  <texture name="radarbox_t" file_name="icons/radar_t.png" preload="false" />
+  <texture name="Radar_VoicePTT_Lvl1" file_name="bottomtray/VoicePTT_Lvl1.png" preload="false" />
+  <texture name="Radar_VoicePTT_Lvl2" file_name="bottomtray/VoicePTT_Lvl2.png" preload="false" />
+  <texture name="Radar_VoicePTT_Lvl3" file_name="bottomtray/VoicePTT_Lvl3.png" preload="false" />
+  <texture name="Radar_VoicePTT_Off" file_name="bottomtray/VoicePTT_Off.png" preload="false" />
+  <texture name="Radar_VoicePTT_On" file_name="bottomtray/VoicePTT_On.png" preload="false" />
 </textures>

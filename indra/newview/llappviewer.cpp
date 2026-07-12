@@ -39,6 +39,7 @@
 #include "llfile.h"
 #include "llviewertexturelist.h"
 #include "llgroupmgr.h"
+#include "fsradar.h"
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "llagentlanguage.h"
@@ -5791,6 +5792,12 @@ void LLAppViewer::disconnectViewer()
     if (gFloaterView)
     {
         gFloaterView->restoreAll();
+    }
+
+    // Prism: shut down the radar before the subsystems it observes go away
+    if (FSRadar::instanceExists())
+    {
+        FSRadar::deleteSingleton();
     }
 
     if (LLSelectMgr::instanceExists())

@@ -1016,6 +1016,7 @@ public:
     void            clearChat();
     void            startTyping() { mTyping = true; mTypingTimer.reset(); }
     void            stopTyping() { mTyping = false; }
+    bool            isTyping() const { return mTyping; } // Prism: typing state accessor for the radar
 private:
     bool            mVisibleChat;
 

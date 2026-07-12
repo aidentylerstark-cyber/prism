@@ -90,6 +90,7 @@
 #include "message.h"
 #include "v3math.h"
 
+#include "fsradar.h"
 #include "llagent.h"
 #include "llagentbenefits.h"
 #include "llagentcamera.h"
@@ -2463,6 +2464,11 @@ bool idle_startup()
         // (just accessing this the first time will fetch it,
         // then the data is cached for the viewer's lifetime)
         LLProductInfoRequestManager::instance();
+
+        // Prism: create the radar singleton now so that enter/leave alerts
+        // and script channel reports work without the radar window open.
+        FSRadar::instance();
+        LL_INFOS("AppInit") << "Radar initialized" << LL_ENDL;
 
         // *FIX:Mani - What do I do here?
         // Need we really clear the Auth response data?

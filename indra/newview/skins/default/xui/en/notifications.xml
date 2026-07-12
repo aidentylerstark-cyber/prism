@@ -12795,4 +12795,20 @@ are wearing now.
           name="okignore"
           yestext="OK"/>
   </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="TeleportToAvatarNotPossible"
+   type="alertmodal">
+Teleport to this avatar not possible, because the exact position is unknown.
+  <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="TrackAvatarNotPossible"
+   type="alertmodal">
+Cannot track this avatar, because it is beyond radar range.
+  <tag>fail</tag>
+  </notification>
 </notifications>

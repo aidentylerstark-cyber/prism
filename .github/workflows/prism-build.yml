@@ -1,0 +1,144 @@
+name: Prism Build
+  
+  # Lean open-source (ReleaseOS) build for the Prism third-party viewer.
+  # Reuses upstream build.sh so artifact detection works, but forces the
+  # ReleaseOS configuration (no proprietary libs, no Bugsplat, no LL secrets)
+  # and sets the Prism channel itself. No signing/release jobs.
+  
+  on:
+    workflow_dispatch: 
+    push:
+      branches: ["main"]
+
+  jobs:
+    build:
+      strategy:
+        fail-fast: false
+        matrix:
+          runner: ["windows-2022", "macos-15-xlarge"]
+      runs-on: ${{ matrix.runner }}
+      env:
+        AUTOBUILD_ADDRSIZE: 64
+        AUTOBUILD_BUILD_ID: ${{ github.run_id }}
+        AUTOBUILD_CONFIGURATION: ReleaseOS
+        AUTOBUILD_GITHUB_TOKEN: ${{ github.token }}
+        AUTOBUILD_INSTALLABLE_CACHE: ${{ github.workspace }}/.autobuild-installables
+        AUTOBUILD_VARIABLES_FILE: ${{ github.workspace }}/.build-variables/variables
+        AUTOBUILD_VCS_INFO: "true"
+        AUTOBUILD_VSVER: "170"
+        DEVELOPER_DIR: "/Applications/Xcode_16.4.app/Contents/Developer"
+        build_coverity: false
+        build_log_dir: ${{ github.workspace }}/.logs
+        build_viewer: true
+        BUILDSCRIPTS_SHARED: ${{ github.workspace }}/.shared
+        BUILDSCRIPTS_SUPPORT_FUNCTIONS: ${{ github.workspace
+  }}/buildscripts_support_functions
+        GIT_REF: ${{ github.ref }}
+        LL_SKIP_REQUIRE_SYSROOT: 1
+        LOGFAIL: DEBUG
+        master_message_template_checkout: ${{ github.workspace
+  }}/.master-message-template
+        variants: ReleaseOS
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v6
+  
+        - name: Setup python
+          uses: actions/setup-python@v6
+          with:
+            python-version: "3.11"
+
+        - name: Checkout build variables
+          uses: actions/checkout@v6
+          with:
+            repository: secondlife/build-variables
+            ref: master
+            path: .build-variables
+
+        - name: Checkout master-message-template
+          uses: actions/checkout@v6
+          with:
+            repository: secondlife/master-message-template
+            path: .master-message-template
+
+        - name: Install autobuild and python dependencies
+          run: pip3 install autobuild llsd
+
+        - name: Cache autobuild packages
+          uses: actions/cache@v5
+          with:
+            path: .autobuild-installables
+            key: ${{ runner.os }}-64-ReleaseOS-${{ hashFiles('autobuild.xml') }}
+            restore-keys: |
+              ${{ runner.os }}-64-ReleaseOS-
+              ${{ runner.os }}-64-
+  
+        - name: Build
+          id: build
+          shell: bash
+          env:
+            AUTOBUILD_VCS_BRANCH: ${{ github.ref_name }}
+            RUNNER_OS: ${{ runner.os }}
+          run: |
+            set -x
+            mkdir -p "$build_log_dir"
+            mkdir -p "$BUILDSCRIPTS_SHARED/packages/lib/python"
+            source "$BUILDSCRIPTS_SUPPORT_FUNCTIONS"
+            if [[ "$OSTYPE" =~ cygwin|msys ]]; then
+              native_path() { cygpath --windows "$1"; }
+              shell_path()  { cygpath --unix "$1"; }
+            else
+              native_path() { echo "$1"; }
+              shell_path()  { echo "$1"; }
+            fi
+            finalize() { case "$1" in true|0) record_success "Build Succeeded";; *) 
+  record_failure "Build Failed with $1";; esac; }
+            initialize_build() { echo "initialize_build"; }
+            initialize_version() { export revision="$AUTOBUILD_BUILD_ID"; }
+            python_cmd() {
+              if [[ "x${1:0:1}" == "x-" ]]; then "$(shell_path "$PYTHON_COMMAND")" 
+  "$@";
+              elif [[ "$(basename "$1")" == "codeticket.py" ]]; then echo "## $@";
+              else local script="$1"; shift; "$(shell_path "$PYTHON_COMMAND")" 
+  "$(native_path "$script")" "$@"; fi
+            }
+            repo_branch() { echo "$AUTOBUILD_VCS_BRANCH"; }
+            record_dependencies_graph() { echo "skip dependency graph"; }
+            sleep() { echo "Not sleeping for $1 seconds"; }
+            export -f native_path shell_path finalize initialize_build 
+  initialize_version
+            export -f python_cmd repo_branch record_dependencies_graph sleep
+            export arch=$(uname | cut -b-6)
+            [[ "$arch" == "MINGW6" ]] && arch=CYGWIN
+            export AUTOBUILD="$(which autobuild)"
+
+            # Prism channel -- do NOT use upstream's hardcoded "Second Life" logic.
+            export viewer_channel="Prism Test"
+            echo "viewer_channel=$viewer_channel"
+            echo "viewer_channel=$viewer_channel" >> "$GITHUB_OUTPUT"
+  
+            if [[ "$RUNNER_OS" == "Windows" ]]; then
+              export PYTHON="$(native_path "$(which python)")"
+              export PYTHON_COMMAND="$PYTHON"
+            else
+              export PYTHON_COMMAND="python3"
+            fi
+            export PYTHON_COMMAND_NATIVE="$(native_path "$PYTHON_COMMAND")"
+
+            ./build.sh
+
+        - name: List build outputs (diagnostic)
+          if: always()
+          shell: bash 
+          run: |
+            echo "viewer_app=${{ steps.build.outputs.viewer_app }}"
+            echo "--- candidate viewer artifacts ---"
+            find build-* -maxdepth 6 \( -iname "Prism*" -o -iname "*.dmg" -o -iname 
+  "*.exe" -o -iname "*.app" \) 2>/dev/null | head -80 || true
+
+        - name: Upload viewer app
+          if: steps.build.outputs.viewer_app
+          uses: actions/upload-artifact@v6
+          with:
+            name: "prism-${{ runner.os }}-ReleaseOS-app"
+            path: ${{ steps.build.outputs.viewer_app }}

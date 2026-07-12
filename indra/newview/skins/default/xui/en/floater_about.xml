@@ -93,6 +93,10 @@ Dummy Name replaced at run time
        top="5"
        width="465"
        word_wrap="true">
+        Prism is a third-party viewer based on the Second Life Viewer (Copyright (C) Linden Research, Inc.), licensed under the GNU Lesser General Public License, version 2.1.
+        Prism incorporates source code from the Firestorm Viewer (Copyright (C) The Phoenix Firestorm Project, Inc.) and the Black Dragon Viewer (Copyright (C) NiranV Dean), each licensed under the GNU LGPL v2.1.
+        Prism is not affiliated with, sponsored by, or endorsed by Linden Research, Inc. "Second Life" and the Eye-in-Hand logo are trademarks of Linden Research, Inc.
+
         3Dconnexion SDK Copyright (C) 1992-2009 3Dconnexion
         APR Copyright (C) 2011 The Apache Software Foundation
         Collada DOM Copyright 2006 Sony Computer Entertainment Inc.
